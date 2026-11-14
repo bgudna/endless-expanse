@@ -30,7 +30,8 @@ void drawRect(LineBatch& lines, const Rect& r, const glm::vec4& color, float wid
 void Hud::layout(glm::vec2 screenSize, const HudState& state) {
     screen_ = screenSize;
 
-    labels_[Recenter] = "RECENTER";
+    labels_[Follow] = state.follow ? "FOLLOW ON" : "FOLLOW OFF";
+    labels_[Assist] = state.dragAssist ? "ASSIST ON" : "ASSIST OFF";
     labels_[Pause] = "PAUSE";
     labels_[Bloom] = std::string("BLOOM ") + toString(state.bloom);
     labels_[RocksMinus] = "ROCKS -";
@@ -62,7 +63,8 @@ HudEvents Hud::handleInput(const InputState& input) {
         overButton = true;
         if (!input.pressed[InputState::Left]) continue;
         switch (i) {
-        case Recenter: ev.recenter = true; break;
+        case Follow: ev.toggleFollow = true; break;
+        case Assist: ev.toggleAssist = true; break;
         case Pause: ev.pause = true; break;
         case Bloom: ev.cycleBloom = true; break;
         case RocksMinus: ev.rockDelta = -1; break;
@@ -124,8 +126,11 @@ void Hud::render(Renderer& r, const HudState& state) const {
     r.drawText(buf, {kMargin, screen_.y - kMargin - kButtonHeight - 22.0f}, 11.0f,
                colors::scaled(colors::amber, 0.8f), 1.2f);
 
-    r.drawTextCentered("WHEEL: ZOOM   DRAG: PAN", {screen_.x * 0.5f, 24.0f}, 11.0f,
-                       colors::scaled(colors::white, 0.5f), 1.2f);
+    r.drawTextCentered("WHEEL: ZOOM   LEFT-DRAG: PAN   RIGHT-CLICK: GO   CLICK: SELECT   DOUBLE-CLICK: FLY TO",
+                       {screen_.x * 0.5f, 26.0f}, 11.0f, colors::scaled(colors::white, 0.5f), 1.2f);
+
+    if (!state.info.empty())
+        r.drawText(state.info, {kMargin, 84.0f}, 11.0f, colors::scaled(colors::phosphor, 0.9f), 1.2f);
 }
 
 } // namespace ee

@@ -2,12 +2,17 @@
 
 #include "app/Hud.h"
 #include "camera/Camera2D.h"
+#include "core/Random.h"
 #include "core/StateStack.h"
 #include "render/Renderer.h"
+#include "sim/ExhaustTrail.h"
+#include "sim/Ship.h"
 #include "vector/VectorShape.h"
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
+#include <string>
 #include <vector>
 
 namespace ee {
@@ -41,7 +46,8 @@ private:
 };
 
 // M3 demo scene: a large sector with a pan/zoom camera.
-//   wheel: zoom at cursor   left/middle drag: pan   HUD buttons for everything else
+//   wheel: zoom   left-drag / middle-drag: pan   right-click (or hold): fly there
+//   left-click: select   double-click: fly to the selected object
 class PlayingState : public GameState {
 public:
     explicit PlayingState(Renderer& r);
@@ -66,24 +72,43 @@ private:
         float depth;       // parallax factor
         float brightness;
     };
+    struct Selection {
+        enum class Kind { None, Planet, Rock } kind = Kind::None;
+        std::size_t index = 0;
+    };
 
     HudState hudState() const;
     void drawGrid(const CameraView& v);
     void drawStars(const CameraView& v);
+    void drawDestination(const CameraView& v, double t);
+
+    Selection pick(const CameraView& v, glm::vec2 screenPoint) const;
+    bool selectionValid() const;
+    glm::vec2 selectionPos() const;
+    float selectionRadius() const;
+    std::string selectionName() const;
+    void flyToSelection();
 
     Renderer& r_;
     Camera2D camera_;
     Hud hud_;
-    VectorShape ship_, planet_;
+    Ship ship_;
+    ExhaustTrail exhaust_;
+    Random rng_{777};
+    VectorShape shipShape_, planetShape_, circleShape_, diamondShape_;
     std::vector<VectorShape> rockShapes_;
     std::vector<Rock> rocks_;
     std::vector<Planet> planets_;
     std::vector<Star> stars_;
     int rockCount_ = 300;
-    glm::vec2 shipPos_{0.0f};
+    bool follow_ = true;
+    Selection selection_;
+    double lastClickTime_ = -10.0;
+    glm::vec2 lastClickPos_{0.0f};
     glm::vec2 mouse_{0.0f};
     bool leftOnWorld_ = false;
     bool middleOnWorld_ = false;
+    bool rightOnWorld_ = false;
     float leftTravel_ = 0.0f;
     double simTime_ = 0.0;
     double prevSimTime_ = 0.0;

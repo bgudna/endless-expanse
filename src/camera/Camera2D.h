@@ -39,6 +39,9 @@ public:
     void snapTo(glm::vec2 center, float zoom);
     // Smoothly move the view centre to a world point; cancels any zoom anchor.
     void moveTo(glm::vec2 worldPoint);
+    // Set where the view should settle (e.g. the player ship) without cancelling an
+    // in-progress zoom anchor. Call every step while following.
+    void setFollowTarget(glm::vec2 worldPoint) { targetCenter_ = worldPoint; }
     // Drag: the world follows the cursor by `screenDelta` points, immediately.
     void panByScreenDelta(glm::vec2 screenDelta);
     // Multiply the target zoom by `factor`, keeping the world point under `screenPoint` fixed.

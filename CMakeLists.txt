@@ -38,6 +38,8 @@ add_library(ee_core STATIC
     src/core/StateStack.cpp
     src/core/Log.cpp
     src/camera/Camera2D.cpp
+    src/sim/Ship.cpp
+    src/sim/ExhaustTrail.cpp
     src/vector/VectorShape.cpp
     src/vector/Shapes.cpp
     src/vector/StrokeFont.cpp)

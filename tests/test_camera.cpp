@@ -127,3 +127,21 @@ TEST_CASE("simulation steps at different rates reach the same zoom") {
     };
     CHECK(settle(1.0 / 60.0) == doctest::Approx(settle(1.0 / 120.0)).epsilon(1e-2));
 }
+
+TEST_CASE("follow target recentres smoothly and does not cancel a zoom anchor") {
+    Camera2D c = makeCamera();
+    const glm::vec2 cursor(800.0f, 100.0f);
+    const glm::vec2 anchored = c.current().screenToWorld(cursor);
+    c.zoomAt(cursor, 2.0f);
+    for (int i = 0; i < 5; ++i) {
+        c.setFollowTarget({50.0f, 0.0f});
+        c.update(kDt);
+        // While zooming, the anchored point stays under the cursor.
+        checkNear(c.current().worldToScreen(anchored), cursor);
+    }
+    for (int i = 0; i < 300; ++i) {
+        c.setFollowTarget({50.0f, 0.0f});
+        c.update(kDt);
+    }
+    checkNear(c.current().center, {50.0f, 0.0f}, 1e-3f);
+}

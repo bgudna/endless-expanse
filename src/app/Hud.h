@@ -23,16 +23,20 @@ struct HudState {
     float zoomUnit = 1.0f; // 0 = far out, 1 = close in
     BloomQuality bloom = BloomQuality::High;
     int rocks = 0;
+    bool follow = true;
+    bool dragAssist = true;
     glm::vec2 mouseWorld{0.0f};
+    std::string info; // multi-line ship / selection readout (left side)
 };
 
 // What the player asked for this frame.
 struct HudEvents {
     bool consumedMouse = false; // pointer is over / dragging a HUD element
-    bool recenter = false;
+    bool toggleFollow = false;
+    bool toggleAssist = false;
     bool pause = false;
     bool cycleBloom = false;
-    int rockDelta = 0; // -1 or +1 steps
+    int rockDelta = 0;      // -1 or +1 steps
     float zoomUnit = -1.0f; // >= 0 when the slider moved
 };
 
@@ -40,7 +44,7 @@ struct HudEvents {
 // (A reusable UI toolkit arrives in M9.)
 class Hud {
 public:
-    enum Button { Recenter, Pause, Bloom, RocksMinus, RocksPlus, ButtonCount };
+    enum Button { Follow, Assist, Pause, Bloom, RocksMinus, RocksPlus, ButtonCount };
 
     void layout(glm::vec2 screenSize, const HudState& state);
     HudEvents handleInput(const InputState& input);

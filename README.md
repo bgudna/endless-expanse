@@ -14,16 +14,19 @@ ctest --test-dir build --output-on-failure
 
 The first configure fetches doctest and glm from GitHub. Other platforms need an OpenGL loader (glad) added in `src/render/gl.h`.
 
-## Current controls (M3 demo)
+## Current controls (M4 demo)
 
 | Action | Result |
 |---|---|
 | Left-click on the main menu | Start the demo scene |
-| Mouse wheel | Zoom toward the cursor |
-| Zoom slider (right edge) | Drag to zoom around the screen centre |
-| Left-drag or middle-drag on empty space | Pan the camera |
-| Move the mouse | The ship turns to face the cursor |
-| HUD buttons (bottom-left) | RECENTER on the ship, PAUSE, cycle BLOOM quality, ROCKS -/+ (stress test, up to 6000) |
+| Right-click on the map | Fly the ship there (autopilot: turn, thrust, coast, flip, brake) |
+| Hold the right button | Keep steering toward the cursor |
+| Left-click an object | Select it (info shown at left) |
+| Double-click an object | Fly to it, stopping 50 units off its surface |
+| Mouse wheel | Zoom (around the ship while FOLLOW is on, otherwise toward the cursor) |
+| Left-drag or middle-drag | Pan the camera (turns FOLLOW off) |
+| Zoom slider (right edge) | Drag to zoom |
+| HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, ROCKS -/+ (stress test, up to 6000) |
 | Middle-click (no drag) | Toggle the on-screen FPS / frame-time / segment-count readout |
 | Left-click while paused | Resume |
 | Right-click while paused | Back to the main menu |
@@ -32,6 +35,7 @@ The first configure fetches doctest and glm from GitHub. Other platforms need an
 
 - `src/core`: simulation-side code. It must not include SDL or GL (fixed timestep, state stack, input snapshot, logging, RNG).
 - `src/camera`: `Camera2D` (smooth pan/zoom, zoom-at-cursor) and `CameraView` (coordinate transforms, culling). No GL.
+- `src/sim`: ship physics and autopilot, engine exhaust (no GL, deterministic).
 - `src/vector`: vector shapes, procedural placeholder art, the stroke font, and `Transform2D` (no GL).
 - `src/render`: line batch, bloom post-process, and `Renderer`. `gl.h` is the only file that includes OpenGL headers.
 - `src/platform`: SDL window, GL context, and event polling.
