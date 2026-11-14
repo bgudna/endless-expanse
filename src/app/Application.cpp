@@ -6,6 +6,7 @@
 
 #include <SDL.h>
 
+#include <cmath>
 #include <cstdio>
 
 namespace ee {
@@ -62,7 +63,12 @@ int Application::run() {
         last = now;
 
         input_.poll(inputState_);
-        if (inputState_.pressed[InputState::Middle]) debugOverlay_ = !debugOverlay_;
+        // Middle-click (without dragging) toggles the debug readout; dragging pans the camera.
+        if (inputState_.pressed[InputState::Middle]) middleTravel_ = 0.0f;
+        if (inputState_.down[InputState::Middle])
+            middleTravel_ += std::hypot(inputState_.deltaX, inputState_.deltaY);
+        if (inputState_.released[InputState::Middle] && middleTravel_ < 4.0f)
+            debugOverlay_ = !debugOverlay_;
 
         states_.handleInput(inputState_);
         states_.applyPending();

@@ -37,6 +37,7 @@ add_library(ee_core STATIC
     src/core/FixedTimestep.cpp
     src/core/StateStack.cpp
     src/core/Log.cpp
+    src/camera/Camera2D.cpp
     src/vector/VectorShape.cpp
     src/vector/Shapes.cpp
     src/vector/StrokeFont.cpp)
@@ -49,6 +50,7 @@ add_executable(endless_expanse
     src/main.cpp
     src/app/Application.cpp
     src/app/States.cpp
+    src/app/Hud.cpp
     src/platform/Window.cpp
     src/platform/Input.cpp
     src/render/Shader.cpp

@@ -27,8 +27,9 @@ private:
     StateStack states_;
     FixedTimestep timestep_{1.0 / 60.0};
 
-    // Toggled by middle-click.
+    // Toggled by a middle-click (not a drag).
     bool debugOverlay_ = true;
+    float middleTravel_ = 0.0f;
     std::string debugText_;
     double statAccum_ = 0.0;
     int statFrames_ = 0;

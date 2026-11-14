@@ -22,3 +22,16 @@ Text is drawn with a built-in vector stroke font (4x6 grid, A-Z, 0-9, common pun
 
 ## D7: GL loader deferred
 macOS provides GL 3.3 core functions directly via `<OpenGL/gl3.h>`. A loader (glad) will be added in `src/render/gl.h` when another platform is targeted.
+
+## D8: Camera
+`Camera2D` lives in `src/camera` (no GL) and is stepped by the fixed simulation timestep; rendering uses `view(alpha)` to interpolate. Zoom eases exponentially in log space, and zooming holds a world-space anchor under the cursor until the zoom settles. Dragging pans immediately (no lag). Zoom range is 0.02x (far out) to 4x (close). Mouse conversions use `current()`; drawing uses `view(alpha)`.
+
+## D9: Mouse button assignments
+- Wheel: zoom at cursor.
+- Left-drag (after 4 px) or middle-drag on empty space: pan.
+- Plain left-click on the world is reserved for selection (M4). Right-click is reserved for "go here" (M4).
+- Middle-click without dragging toggles the debug readout.
+- Pause is an on-screen button, not a click gesture.
+
+## D10: Culling and level of detail
+Shapes outside the viewport are skipped on the CPU. Shapes whose on-screen radius is under 3 px collapse to a single dot (1 segment instead of ~10-50). The player ship is drawn as an enlarged icon when zoomed far out so it never disappears. The grid spacing grows by 10x steps to stay readable.

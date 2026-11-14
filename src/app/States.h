@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/Hud.h"
+#include "camera/Camera2D.h"
 #include "core/StateStack.h"
 #include "render/Renderer.h"
 #include "vector/VectorShape.h"
@@ -38,8 +40,8 @@ private:
     double prevTime_ = 0.0;
 };
 
-// M2 demo scene: stars, planet, ship and a stress field of asteroids.
-//   left-click: cycle bloom   wheel: more/fewer asteroids   right-click: pause
+// M3 demo scene: a large sector with a pan/zoom camera.
+//   wheel: zoom at cursor   left/middle drag: pan   HUD buttons for everything else
 class PlayingState : public GameState {
 public:
     explicit PlayingState(Renderer& r);
@@ -54,19 +56,35 @@ private:
         float spin;
         int variant;
     };
-    struct Star {
+    struct Planet {
         glm::vec2 pos;
-        float size;
+        float radius;
+        glm::vec4 color;
+    };
+    struct Star {
+        glm::vec2 unitPos; // position within the screen, 0..1
+        float depth;       // parallax factor
         float brightness;
     };
 
+    HudState hudState() const;
+    void drawGrid(const CameraView& v);
+    void drawStars(const CameraView& v);
+
     Renderer& r_;
-    VectorShape ship_, planet_, star_;
+    Camera2D camera_;
+    Hud hud_;
+    VectorShape ship_, planet_;
     std::vector<VectorShape> rockShapes_;
     std::vector<Rock> rocks_;
+    std::vector<Planet> planets_;
     std::vector<Star> stars_;
-    int rockCount_ = 100;
+    int rockCount_ = 300;
+    glm::vec2 shipPos_{0.0f};
     glm::vec2 mouse_{0.0f};
+    bool leftOnWorld_ = false;
+    bool middleOnWorld_ = false;
+    float leftTravel_ = 0.0f;
     double simTime_ = 0.0;
     double prevSimTime_ = 0.0;
 };
