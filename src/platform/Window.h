@@ -20,6 +20,8 @@ public:
 
     // Drawable size in pixels (differs from window size on HiDPI displays).
     void drawableSize(int& w, int& h) const;
+    // Drawable pixels per logical point (2.0 on Retina displays).
+    float pixelRatio() const;
     bool vsyncEnabled() const { return vsync_; }
 
 private:

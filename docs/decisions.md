@@ -1,0 +1,24 @@
+# Decisions
+
+Short records of choices made during development. Newest last.
+
+## D1: OpenGL 3.3 core, renderer isolated in `src/render`
+macOS caps OpenGL at 4.1, so we target 3.3 core. Only `src/render` and `src/platform` touch GL/SDL, so a different backend can be swapped in later. `src/core` and `src/vector` must stay free of SDL and GL.
+
+## D2: World space is Y-down
+World coordinates match screen and mouse coordinates (origin top-left in screen space, +Y downwards), so no flips are needed anywhere. A positive rotation turns clockwise on screen. A shape's forward direction is +X. Cameras (M3) build on `Renderer::worldView()`.
+
+## D3: Logical points for all drawing and line widths
+Everything is drawn in logical points (the same units as mouse input). `Renderer` converts to drawable pixels using the pixel ratio (2.0 on Retina). Line widths are specified in points and stay constant when zooming.
+
+## D4: Line rendering
+Each segment is one GPU instance, expanded to a quad in the vertex shader. The fragment shader draws a capsule distance field, giving anti-aliased edges and round caps/joins with no MSAA. Blending is additive (`SRC_ALPHA, ONE`) so overlapping strokes brighten, like a vector monitor.
+
+## D5: Bloom
+Scene renders to an RGBA16F target. Bloom is a downsample plus separable gaussian chain. Off: render straight to the screen. Low: one level at half resolution. High: three levels (1/2, 1/4, 1/8).
+
+## D6: Stroke font
+Text is drawn with a built-in vector stroke font (4x6 grid, A-Z, 0-9, common punctuation, lowercase shown as uppercase) so the HUD matches the vector look. Glyphs are data in `src/vector/StrokeFont.cpp`.
+
+## D7: GL loader deferred
+macOS provides GL 3.3 core functions directly via `<OpenGL/gl3.h>`. A loader (glad) will be added in `src/render/gl.h` when another platform is targeted.

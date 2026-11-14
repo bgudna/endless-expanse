@@ -18,8 +18,6 @@ bool Window::create(const std::string& title, int width, int height) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
     window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
                                height,
@@ -48,5 +46,12 @@ void Window::swap() { SDL_GL_SwapWindow(window_); }
 void Window::setTitle(const std::string& title) { SDL_SetWindowTitle(window_, title.c_str()); }
 
 void Window::drawableSize(int& w, int& h) const { SDL_GL_GetDrawableSize(window_, &w, &h); }
+
+float Window::pixelRatio() const {
+    int dw = 0, dh = 0, lw = 0, lh = 0;
+    SDL_GL_GetDrawableSize(window_, &dw, &dh);
+    SDL_GetWindowSize(window_, &lw, &lh);
+    return lw > 0 ? static_cast<float>(dw) / static_cast<float>(lw) : 1.0f;
+}
 
 } // namespace ee

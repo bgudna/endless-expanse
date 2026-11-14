@@ -19,6 +19,12 @@ include(cmake/Warnings.cmake)
 find_package(SDL2 REQUIRED)
 
 include(FetchContent)
+FetchContent_Declare(glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.1
+    SYSTEM)
+FetchContent_MakeAvailable(glm)
+
 if(EE_BUILD_TESTS)
     FetchContent_Declare(doctest
         GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -30,8 +36,12 @@ endif()
 add_library(ee_core STATIC
     src/core/FixedTimestep.cpp
     src/core/StateStack.cpp
-    src/core/Log.cpp)
+    src/core/Log.cpp
+    src/vector/VectorShape.cpp
+    src/vector/Shapes.cpp
+    src/vector/StrokeFont.cpp)
 target_include_directories(ee_core PUBLIC src)
+target_link_libraries(ee_core PUBLIC glm::glm)
 ee_enable_warnings(ee_core)
 
 # ---- Game executable --------------------------------------------------------
@@ -40,7 +50,11 @@ add_executable(endless_expanse
     src/app/Application.cpp
     src/app/States.cpp
     src/platform/Window.cpp
-    src/platform/Input.cpp)
+    src/platform/Input.cpp
+    src/render/Shader.cpp
+    src/render/LineBatch.cpp
+    src/render/PostProcess.cpp
+    src/render/Renderer.cpp)
 target_link_libraries(endless_expanse PRIVATE ee_core SDL2::SDL2)
 if(TARGET SDL2::SDL2main)
     target_link_libraries(endless_expanse PRIVATE SDL2::SDL2main)

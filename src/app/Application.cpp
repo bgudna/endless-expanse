@@ -16,32 +16,40 @@ bool Application::init() {
         return false;
     }
     if (!window_.create("Endless Expanse", 1280, 720)) return false;
+    if (!renderer_.init()) return false;
 
-    states_.push(std::make_unique<BootState>());
+    states_.push(std::make_unique<BootState>(renderer_));
     states_.applyPending();
     return true;
 }
 
-void Application::updateTitleStats(double frameSeconds, int steps) {
+void Application::updateStats(double frameSeconds, int steps) {
     statAccum_ += frameSeconds;
     ++statFrames_;
     statSteps_ += steps;
     if (frameSeconds > statWorstFrame_) statWorstFrame_ = frameSeconds;
     if (statAccum_ < 0.5) return;
 
-    if (debugOverlay_) {
-        char buf[160];
-        std::snprintf(buf, sizeof buf,
-                      "Endless Expanse | %.0f fps | %.2f ms avg, %.2f ms worst | %d sim steps/s%s",
-                      statFrames_ / statAccum_, statAccum_ / statFrames_ * 1000.0,
-                      statWorstFrame_ * 1000.0, static_cast<int>(statSteps_ / statAccum_ + 0.5),
-                      window_.vsyncEnabled() ? "" : " | no vsync");
-        window_.setTitle(buf);
-    }
+    const LineBatch::Stats& ls = renderer_.lines().lastFrameStats();
+    char buf[200];
+    std::snprintf(buf, sizeof buf,
+                  "%.0f FPS  %.2f MS (WORST %.1f)\nSIM %d/S  SEGS %zu  DRAWS %zu\nBLOOM %s%s",
+                  statFrames_ / statAccum_, statAccum_ / statFrames_ * 1000.0,
+                  statWorstFrame_ * 1000.0, static_cast<int>(statSteps_ / statAccum_ + 0.5),
+                  ls.segments, ls.drawCalls, toString(renderer_.bloomQuality()),
+                  window_.vsyncEnabled() ? "" : "  NO VSYNC");
+    debugText_ = buf;
+
     statAccum_ = 0.0;
     statFrames_ = 0;
     statSteps_ = 0;
     statWorstFrame_ = 0.0;
+}
+
+void Application::drawDebugOverlay() {
+    if (!debugOverlay_ || debugText_.empty()) return;
+    renderer_.drawText(debugText_, {16.0f, 16.0f}, 11.0f, colors::scaled(colors::phosphor, 0.8f),
+                       1.2f);
 }
 
 int Application::run() {
@@ -54,10 +62,7 @@ int Application::run() {
         last = now;
 
         input_.poll(inputState_);
-        if (inputState_.pressed[InputState::Middle]) {
-            debugOverlay_ = !debugOverlay_;
-            if (!debugOverlay_) window_.setTitle("Endless Expanse");
-        }
+        if (inputState_.pressed[InputState::Middle]) debugOverlay_ = !debugOverlay_;
 
         states_.handleInput(inputState_);
         states_.applyPending();
@@ -70,11 +75,13 @@ int Application::run() {
 
         int w = 0, h = 0;
         window_.drawableSize(w, h);
-        glViewport(0, 0, w, h);
+        renderer_.beginFrame(w, h, window_.pixelRatio());
         states_.render(timestep_.alpha());
+        drawDebugOverlay();
+        renderer_.endFrame();
         window_.swap();
 
-        updateTitleStats(frameSeconds, steps);
+        updateStats(frameSeconds, steps);
 
         // Without vsync, cap at ~60 fps instead of spinning the CPU.
         if (!window_.vsyncEnabled()) {
