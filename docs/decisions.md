@@ -41,3 +41,15 @@ Shapes outside the viewport are skipped on the CPU. Shapes whose on-screen radiu
 
 ## D12: Mouse scheme in play
 Right-click sets a destination (hold to keep steering). Left-click selects; double-click flies to the selection. Left or middle drag pans and turns camera FOLLOW off; the FOLLOW button turns it back on. While following, the wheel zooms around the ship so it stays centred.
+
+## D13: Sectors and procedural world
+The galaxy is implicit: a seed plus the home sector. A sector is a 6000x6000-unit square generated purely from `hash(seed, x, y)` (`src/world/Sector.cpp`), so it is deterministic and can be regenerated at any time; nothing is saved. Positions are sector-local (within +-3000). Contents: star (55%) with 0-4 planets on orbits, 0-2 nebulae, 0-2 asteroid fields, 0-3 debris clusters, derelict (12%), anomaly (8%). The start sector keeps a 400-unit empty disc around the ship. Object kinds and colours are plain enums (`Tint`), mapped to the palette only in the app layer.
+
+## D14: Floating origin
+World space is relative to the "origin sector". When the ship leaves it, `PlayingState::rebaseOrigin` moves the origin and shifts the ship, destination, camera, and exhaust by one sector (`shiftOrigin`). All floats stay within a few thousand units, so there is no precision jitter anywhere in the galaxy. Absolute positions (HUD, parallax stars, grid phase) are computed in double. Selections store absolute sector coordinates so they survive a shift.
+
+## D15: Streaming
+`SectorStreamer` keeps the 3x3 around the ship loaded synchronously, loads other sectors needed by the view (max 9x9) nearest-first at 4 per simulation step, and evicts sectors more than one step outside the wanted box. Zooming far out therefore never stalls a frame.
+
+## D16: Home hint
+Home is 30-45 sectors from the start in a seeded direction. The player only gets an 8-way compass heading and a distance rounded to 5 sectors (`homeHint`). M8 will add ways to refine this.

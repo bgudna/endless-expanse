@@ -8,10 +8,13 @@
 #include "sim/ExhaustTrail.h"
 #include "sim/Ship.h"
 #include "vector/VectorShape.h"
+#include "world/Galaxy.h"
+#include "world/SectorStreamer.h"
 
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -45,47 +48,45 @@ private:
     double prevTime_ = 0.0;
 };
 
-// M3 demo scene: a large sector with a pan/zoom camera.
+// Playing: an endless procedurally generated galaxy streamed in sectors.
 //   wheel: zoom   left-drag / middle-drag: pan   right-click (or hold): fly there
 //   left-click: select   double-click: fly to the selected object
 class PlayingState : public GameState {
 public:
-    explicit PlayingState(Renderer& r);
+    explicit PlayingState(Renderer& r, std::uint64_t galaxySeed = 20260101);
     void handleInput(const InputState& input, StateStack& stack) override;
     void update(double dt, StateStack& stack) override;
     void render(double alpha) override;
 
 private:
-    struct Rock {
-        glm::vec2 pos;
-        float radius;
-        float spin;
-        int variant;
-    };
-    struct Planet {
-        glm::vec2 pos;
-        float radius;
-        glm::vec4 color;
-    };
     struct Star {
         glm::vec2 unitPos; // position within the screen, 0..1
         float depth;       // parallax factor
         float brightness;
     };
+    // Identified by absolute sector coordinates, so it survives origin shifts.
     struct Selection {
-        enum class Kind { None, Planet, Rock } kind = Kind::None;
+        bool valid = false;
+        SectorCoord sector;
         std::size_t index = 0;
     };
 
     HudState hudState() const;
     void drawGrid(const CameraView& v);
+    void drawSectorBorders(const CameraView& v);
+    void drawSectorLabels(const CameraView& v);
     void drawStars(const CameraView& v);
     void drawDestination(const CameraView& v, double t);
+    void drawSector(const CameraView& v, const Sector& sector, double t);
+    void drawObject(const CameraView& v, const SectorObject& o, glm::vec2 offset, double t);
+
+    void visibleRange(const CameraView& v, SectorCoord& lo, SectorCoord& hi) const;
+    void rebaseOrigin();
+    glm::dvec2 absolutePosition(glm::vec2 local) const;
 
     Selection pick(const CameraView& v, glm::vec2 screenPoint) const;
-    bool selectionValid() const;
+    const SectorObject* selectedObject() const;
     glm::vec2 selectionPos() const;
-    float selectionRadius() const;
     std::string selectionName() const;
     void flyToSelection();
 
@@ -95,13 +96,14 @@ private:
     Ship ship_;
     ExhaustTrail exhaust_;
     Random rng_{777};
-    VectorShape shipShape_, planetShape_, circleShape_, diamondShape_;
+    Galaxy galaxy_;
+    SectorStreamer streamer_;
+    SectorCoord origin_; // the sector whose centre is world (0, 0)
+    VectorShape shipShape_, planetShape_, circleShape_, orbitShape_, diamondShape_, starCrossShape_;
     std::vector<VectorShape> rockShapes_;
-    std::vector<Rock> rocks_;
-    std::vector<Planet> planets_;
     std::vector<Star> stars_;
-    int rockCount_ = 300;
     bool follow_ = true;
+    bool showGrid_ = true;
     Selection selection_;
     double lastClickTime_ = -10.0;
     glm::vec2 lastClickPos_{0.0f};

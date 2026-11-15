@@ -42,6 +42,12 @@ public:
 
     void teleport(glm::vec2 position, float heading);
     void setVelocity(glm::vec2 v) { vel_ = v; }
+    // Floating-origin rebase: move everything the ship remembers by `delta` (no visible jump).
+    void shiftOrigin(glm::vec2 delta) {
+        pos_ += delta;
+        prevPos_ += delta;
+        dest_ += delta;
+    }
 
     glm::vec2 position() const { return pos_; }
     glm::vec2 velocity() const { return vel_; }

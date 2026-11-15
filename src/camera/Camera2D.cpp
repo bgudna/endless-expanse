@@ -40,6 +40,13 @@ void Camera2D::snapTo(glm::vec2 center, float zoom) {
     anchorActive_ = false;
 }
 
+void Camera2D::shiftOrigin(glm::vec2 delta) {
+    prev_.center += delta;
+    curr_.center += delta;
+    targetCenter_ += delta;
+    anchorWorld_ += delta;
+}
+
 void Camera2D::moveTo(glm::vec2 worldPoint) {
     targetCenter_ = worldPoint;
     anchorActive_ = false;

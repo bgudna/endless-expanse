@@ -14,7 +14,7 @@ ctest --test-dir build --output-on-failure
 
 The first configure fetches doctest and glm from GitHub. Other platforms need an OpenGL loader (glad) added in `src/render/gl.h`.
 
-## Current controls (M4 demo)
+## Current controls (M5 demo)
 
 | Action | Result |
 |---|---|
@@ -26,7 +26,7 @@ The first configure fetches doctest and glm from GitHub. Other platforms need an
 | Mouse wheel | Zoom (around the ship while FOLLOW is on, otherwise toward the cursor) |
 | Left-drag or middle-drag | Pan the camera (turns FOLLOW off) |
 | Zoom slider (right edge) | Drag to zoom |
-| HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, ROCKS -/+ (stress test, up to 6000) |
+| HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, GRID on/off (sector borders, labels, grid) |
 | Middle-click (no drag) | Toggle the on-screen FPS / frame-time / segment-count readout |
 | Left-click while paused | Resume |
 | Right-click while paused | Back to the main menu |

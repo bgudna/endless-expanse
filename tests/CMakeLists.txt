@@ -4,7 +4,8 @@ add_executable(ee_tests
     test_state_stack.cpp
     test_vector.cpp
     test_camera.cpp
-    test_ship.cpp)
+    test_ship.cpp
+    test_world.cpp)
 target_link_libraries(ee_tests PRIVATE ee_core doctest::doctest)
 ee_enable_warnings(ee_tests)
 

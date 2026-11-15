@@ -49,6 +49,9 @@ public:
     // Set an absolute target zoom, keeping the world point under `screenPoint` fixed.
     void setZoomAt(glm::vec2 screenPoint, float zoom);
 
+    // Floating-origin rebase: shift every stored world position by `delta` (no visible jump).
+    void shiftOrigin(glm::vec2 delta);
+
     void update(double dt);
 
     CameraView view(double alpha) const; // interpolated, for rendering

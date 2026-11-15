@@ -42,7 +42,10 @@ add_library(ee_core STATIC
     src/sim/ExhaustTrail.cpp
     src/vector/VectorShape.cpp
     src/vector/Shapes.cpp
-    src/vector/StrokeFont.cpp)
+    src/vector/StrokeFont.cpp
+    src/world/Sector.cpp
+    src/world/Galaxy.cpp
+    src/world/SectorStreamer.cpp)
 target_include_directories(ee_core PUBLIC src)
 target_link_libraries(ee_core PUBLIC glm::glm)
 ee_enable_warnings(ee_core)

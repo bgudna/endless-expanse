@@ -26,6 +26,9 @@ public:
     void emit(glm::vec2 pos, glm::vec2 exhaustDir, glm::vec2 shipVelocity, Random& rng);
     void update(float dt);
     void clear() { particles_.clear(); }
+    void shiftOrigin(glm::vec2 delta) {
+        for (ExhaustParticle& p : particles_) p.pos += delta;
+    }
 
     const std::vector<ExhaustParticle>& particles() const { return particles_; }
 

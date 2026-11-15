@@ -34,8 +34,7 @@ void Hud::layout(glm::vec2 screenSize, const HudState& state) {
     labels_[Assist] = state.dragAssist ? "ASSIST ON" : "ASSIST OFF";
     labels_[Pause] = "PAUSE";
     labels_[Bloom] = std::string("BLOOM ") + toString(state.bloom);
-    labels_[RocksMinus] = "ROCKS -";
-    labels_[RocksPlus] = "ROCKS +";
+    labels_[Grid] = state.showGrid ? "GRID ON" : "GRID OFF";
 
     float x = kMargin;
     const float y = screenSize.y - kMargin - kButtonHeight;
@@ -67,8 +66,7 @@ HudEvents Hud::handleInput(const InputState& input) {
         case Assist: ev.toggleAssist = true; break;
         case Pause: ev.pause = true; break;
         case Bloom: ev.cycleBloom = true; break;
-        case RocksMinus: ev.rockDelta = -1; break;
-        case RocksPlus: ev.rockDelta = 1; break;
+        case Grid: ev.toggleGrid = true; break;
         default: break;
         }
     }
@@ -122,7 +120,7 @@ void Hud::render(Renderer& r, const HudState& state) const {
     r.drawText(buf, {screen_.x - 16.0f - StrokeFont::measure(buf, 11.0f).x, 74.0f}, 11.0f,
                colors::scaled(colors::cyan, 0.7f), 1.2f);
 
-    std::snprintf(buf, sizeof buf, "ROCKS %d", state.rocks);
+    std::snprintf(buf, sizeof buf, "SECTORS %d  OBJECTS %d", state.sectorsLoaded, state.objects);
     r.drawText(buf, {kMargin, screen_.y - kMargin - kButtonHeight - 22.0f}, 11.0f,
                colors::scaled(colors::amber, 0.8f), 1.2f);
 

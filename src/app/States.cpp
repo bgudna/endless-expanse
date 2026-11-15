@@ -12,15 +12,15 @@
 namespace ee {
 
 namespace {
-constexpr int kMaxRocks = 6000;
-constexpr int kRockStep = 100;
 constexpr int kStarCount = 500;
-constexpr int kRockVariants = 8;
-constexpr float kSectorHalfWidth = 3000.0f;
-constexpr float kSectorHalfHeight = 1800.0f;
+constexpr int kMaxLoadRadius = 4;      // never keep more than 9x9 sectors around the ship
+constexpr int kStreamBudget = 4;       // non-essential sectors generated per simulation step
+constexpr float kOrbitMaxZoom = 0.6f;  // orbit rings are hidden when zoomed closer (polygon edges show)
+constexpr float kLabelMinSectorPixels = 150.0f;
 constexpr float kGridBaseSpacing = 500.0f;
 constexpr float kMinGridPixels = 24.0f;
 constexpr float kDotRadiusPixels = 3.0f; // below this on-screen radius, draw a dot instead
+constexpr float kMinDrawPixels = 0.6f;   // rocks/debris smaller than this are not drawn at all
 constexpr float kDragThreshold = 4.0f;
 constexpr float kZoomPerWheelTick = 1.15f;
 constexpr float kShipScale = 28.0f;
@@ -30,6 +30,17 @@ constexpr double kDoubleClickSeconds = 0.35;
 constexpr float kDoubleClickDistance = 8.0f;
 constexpr float kStandoffDistance = 50.0f; // how far from a surface "fly to" stops
 constexpr double kStep = 1.0 / 60.0;
+
+glm::vec4 tintColor(Tint t) {
+    switch (t) {
+    case Tint::Cyan: return colors::cyan;
+    case Tint::Amber: return colors::amber;
+    case Tint::Phosphor: return colors::phosphor;
+    case Tint::Red: return colors::red;
+    case Tint::White: return colors::white;
+    }
+    return colors::white;
+}
 
 // Draw a shape with culling and level-of-detail: off-screen shapes are skipped and
 // tiny ones collapse to a single dot.
@@ -81,30 +92,51 @@ void MainMenuState::render(double alpha) {
 }
 
 // ---- Playing ------------------------------------------------------------
-PlayingState::PlayingState(Renderer& r)
-    : r_(r), shipShape_(shapes::ship()), planetShape_(shapes::planet()),
-      circleShape_(shapes::circle(24)), diamondShape_(shapes::ngon(4)) {
-    for (int i = 0; i < kRockVariants; ++i)
+PlayingState::PlayingState(Renderer& r, std::uint64_t galaxySeed)
+    : r_(r), galaxy_(makeGalaxy(galaxySeed)), streamer_(galaxySeed), shipShape_(shapes::ship()),
+      planetShape_(shapes::planet()), circleShape_(shapes::circle(24)),
+      orbitShape_(shapes::circle(96)), diamondShape_(shapes::ngon(4)),
+      starCrossShape_(shapes::starCross()) {
+    for (int i = 0; i < kShapeVariants; ++i)
         rockShapes_.push_back(shapes::asteroid(static_cast<std::uint64_t>(i) + 1));
 
     Random rng(12345);
     for (int i = 0; i < kStarCount; ++i)
         stars_.push_back({{rng.nextFloat(), rng.nextFloat()}, rng.range(0.01f, 0.08f),
                           rng.range(0.25f, 0.9f)});
-    for (int i = 0; i < kMaxRocks; ++i)
-        rocks_.push_back({{rng.range(-kSectorHalfWidth, kSectorHalfWidth),
-                           rng.range(-kSectorHalfHeight, kSectorHalfHeight)},
-                          rng.range(8.0f, 28.0f), rng.range(-1.0f, 1.0f),
-                          static_cast<int>(rng.nextU64() % kRockVariants)});
-
-    planets_ = {{{-250.0f, -120.0f}, 90.0f, colors::cyan},
-                {{1400.0f, 600.0f}, 220.0f, colors::amber},
-                {{-1800.0f, 900.0f}, 140.0f, colors::phosphor},
-                {{900.0f, -1300.0f}, 70.0f, colors::red},
-                {{-900.0f, -1200.0f}, 180.0f, colors::cyan}};
 
     ship_.teleport({0.0f, 0.0f}, -kPi / 2.0f);
     camera_.snapTo(ship_.position(), 1.0f);
+    streamer_.update(origin_, origin_, origin_, 0);
+}
+
+glm::dvec2 PlayingState::absolutePosition(glm::vec2 local) const {
+    return glm::dvec2(origin_.x, origin_.y) * static_cast<double>(kSectorSize) + glm::dvec2(local);
+}
+
+void PlayingState::visibleRange(const CameraView& v, SectorCoord& lo, SectorCoord& hi) const {
+    const glm::vec2 tl = v.screenToWorld({0.0f, 0.0f});
+    const glm::vec2 br = v.screenToWorld(v.viewport);
+    const auto index = [](float w) { return static_cast<int>(std::floor((w + kSectorHalf) / kSectorSize)); };
+    lo = {std::clamp(origin_.x + index(tl.x), origin_.x - kMaxLoadRadius, origin_.x + kMaxLoadRadius),
+          std::clamp(origin_.y + index(tl.y), origin_.y - kMaxLoadRadius, origin_.y + kMaxLoadRadius)};
+    hi = {std::clamp(origin_.x + index(br.x), origin_.x - kMaxLoadRadius, origin_.x + kMaxLoadRadius),
+          std::clamp(origin_.y + index(br.y), origin_.y - kMaxLoadRadius, origin_.y + kMaxLoadRadius)};
+}
+
+// Keep the ship's coordinates small: when it leaves the origin sector, move the origin to
+// the sector it entered and shift everything else by the opposite amount.
+void PlayingState::rebaseOrigin() {
+    const glm::vec2 p = ship_.position();
+    const int dx = static_cast<int>(std::floor((p.x + kSectorHalf) / kSectorSize));
+    const int dy = static_cast<int>(std::floor((p.y + kSectorHalf) / kSectorSize));
+    if (dx == 0 && dy == 0) return;
+    const glm::vec2 shift(-static_cast<float>(dx) * kSectorSize, -static_cast<float>(dy) * kSectorSize);
+    origin_.x += dx;
+    origin_.y += dy;
+    ship_.shiftOrigin(shift);
+    camera_.shiftOrigin(shift);
+    exhaust_.shiftOrigin(shift);
 }
 
 // ---- Selection ----------------------------------------------------------
@@ -112,54 +144,58 @@ PlayingState::Selection PlayingState::pick(const CameraView& v, glm::vec2 screen
     const glm::vec2 world = v.screenToWorld(screenPoint);
     const float tolerance = kPickPixels / v.zoom;
 
+    SectorCoord lo, hi;
+    visibleRange(v, lo, hi);
+
     Selection best;
     float bestScore = 1e30f;
-    auto consider = [&](Selection::Kind kind, std::size_t index, glm::vec2 pos, float radius) {
-        const float d = glm::length(world - pos);
-        if (d > std::max(radius, tolerance)) return;
-        const float score = d - radius; // prefer the object whose edge is nearest
-        if (score < bestScore) {
-            bestScore = score;
-            best = {kind, index};
+    for (int sy = lo.y; sy <= hi.y; ++sy)
+        for (int sx = lo.x; sx <= hi.x; ++sx) {
+            const Sector* sector = streamer_.find({sx, sy});
+            if (!sector) continue;
+            const glm::vec2 offset = sectorOffset(sector->coord, origin_);
+            for (std::size_t i = 0; i < sector->objects.size(); ++i) {
+                const SectorObject& o = sector->objects[i];
+                const float d = glm::length(world - (o.pos + offset));
+                if (d > std::max(o.radius, tolerance)) continue;
+                // Prefer the object whose edge is nearest; nebulae are a backdrop, so
+                // anything inside one wins over it.
+                float score = d - o.radius;
+                if (o.kind == ObjectKind::Nebula) score += 1.0e5f;
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = {true, sector->coord, i};
+                }
+            }
         }
-    };
-    for (std::size_t i = 0; i < planets_.size(); ++i)
-        consider(Selection::Kind::Planet, i, planets_[i].pos, planets_[i].radius);
-    for (std::size_t i = 0; i < static_cast<std::size_t>(rockCount_); ++i)
-        consider(Selection::Kind::Rock, i, rocks_[i].pos, rocks_[i].radius);
     return best;
 }
 
-bool PlayingState::selectionValid() const {
-    switch (selection_.kind) {
-    case Selection::Kind::Planet: return selection_.index < planets_.size();
-    case Selection::Kind::Rock: return selection_.index < static_cast<std::size_t>(rockCount_);
-    case Selection::Kind::None: return false;
-    }
-    return false;
+const SectorObject* PlayingState::selectedObject() const {
+    if (!selection_.valid) return nullptr;
+    const Sector* s = streamer_.find(selection_.sector);
+    if (!s || selection_.index >= s->objects.size()) return nullptr;
+    return &s->objects[selection_.index];
 }
 
 glm::vec2 PlayingState::selectionPos() const {
-    return selection_.kind == Selection::Kind::Planet ? planets_[selection_.index].pos
-                                                      : rocks_[selection_.index].pos;
-}
-
-float PlayingState::selectionRadius() const {
-    return selection_.kind == Selection::Kind::Planet ? planets_[selection_.index].radius
-                                                      : rocks_[selection_.index].radius;
+    return selectedObject()->pos + sectorOffset(selection_.sector, origin_);
 }
 
 std::string PlayingState::selectionName() const {
-    return std::string(selection_.kind == Selection::Kind::Planet ? "PLANET " : "ROCK ") +
+    return std::string(objectKindName(selectedObject()->kind)) + " " +
+           std::to_string(selection_.sector.x) + "," + std::to_string(selection_.sector.y) + "-" +
            std::to_string(selection_.index + 1);
 }
 
 void PlayingState::flyToSelection() {
-    if (!selectionValid()) return;
+    const SectorObject* o = selectedObject();
+    if (!o) return;
     glm::vec2 away = ship_.position() - selectionPos();
     const float len = glm::length(away);
     away = len > 1e-3f ? away / len : glm::vec2(1.0f, 0.0f);
-    ship_.setDestination(selectionPos() + away * (selectionRadius() + kStandoffDistance));
+    const float standoff = o->kind == ObjectKind::Nebula ? 0.0f : o->radius + kStandoffDistance;
+    ship_.setDestination(selectionPos() + away * standoff);
 }
 
 HudState PlayingState::hudState() const {
@@ -168,23 +204,29 @@ HudState PlayingState::hudState() const {
     s.zoom = cv.zoom;
     s.zoomUnit = Camera2D::zoomToUnit(camera_.targetZoom());
     s.bloom = r_.bloomQuality();
-    s.rocks = rockCount_;
+    s.objects = static_cast<int>(streamer_.loadedObjectCount());
+    s.sectorsLoaded = static_cast<int>(streamer_.loadedCount());
     s.follow = follow_;
+    s.showGrid = showGrid_;
     s.dragAssist = ship_.dragAssist();
-    s.mouseWorld = cv.screenToWorld(mouse_);
+    const glm::dvec2 abs = absolutePosition(cv.screenToWorld(mouse_));
+    s.mouseWorld = {static_cast<float>(abs.x), static_cast<float>(abs.y)};
 
     char buf[160];
-    std::snprintf(buf, sizeof buf, "SPEED %.0f", static_cast<double>(ship_.speed()));
+    std::snprintf(buf, sizeof buf, "SECTOR %d,%d\n", origin_.x, origin_.y);
     s.info = buf;
+    s.info += homeHintText(homeHint(galaxy_, origin_));
+    std::snprintf(buf, sizeof buf, "\n\nSPEED %.0f", static_cast<double>(ship_.speed()));
+    s.info += buf;
     if (ship_.hasDestination()) {
         std::snprintf(buf, sizeof buf, "\nDESTINATION %.0f", static_cast<double>(ship_.distanceToDestination()));
         s.info += buf;
     }
-    if (selectionValid()) {
+    if (const SectorObject* o = selectedObject()) {
         const float dist = glm::length(selectionPos() - ship_.position());
         std::snprintf(buf, sizeof buf, "\n\nSELECTED %s\nDISTANCE %.0f  RADIUS %.0f",
                       selectionName().c_str(), static_cast<double>(dist),
-                      static_cast<double>(selectionRadius()));
+                      static_cast<double>(o->radius));
         s.info += buf;
     }
     return s;
@@ -201,8 +243,7 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
 
     if (ev.pause) stack.push(std::make_unique<PausedState>(r_));
     if (ev.cycleBloom) r_.setBloomQuality(nextQuality(r_.bloomQuality()));
-    if (ev.rockDelta != 0)
-        rockCount_ = std::clamp(rockCount_ + ev.rockDelta * kRockStep, 0, kMaxRocks);
+    if (ev.toggleGrid) showGrid_ = !showGrid_;
     if (ev.toggleFollow) follow_ = !follow_;
     if (ev.toggleAssist) ship_.setDragAssist(!ship_.dragAssist());
     if (ev.zoomUnit >= 0.0f) camera_.setZoomAt(screen * 0.5f, Camera2D::unitToZoom(ev.zoomUnit));
@@ -223,11 +264,10 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
     }
     if (leftOnWorld_ && input.released[InputState::Left]) {
         if (leftTravel_ <= kDragThreshold) {
-            const Selection hit = pick(camera_.current(), mouse_);
+            selection_ = pick(camera_.current(), mouse_);
             const bool doubleClick = simTime_ - lastClickTime_ < kDoubleClickSeconds &&
                                      glm::length(mouse_ - lastClickPos_) < kDoubleClickDistance;
-            selection_ = hit;
-            if (doubleClick && selectionValid()) flyToSelection();
+            if (doubleClick && selectedObject()) flyToSelection();
             lastClickTime_ = doubleClick ? -10.0 : simTime_;
             lastClickPos_ = mouse_;
         }
@@ -265,21 +305,28 @@ void PlayingState::update(double dt, StateStack&) {
                           rng_);
     }
     exhaust_.update(static_cast<float>(dt));
+    rebaseOrigin();
 
     if (follow_) camera_.setFollowTarget(ship_.position());
     camera_.update(dt);
+
+    SectorCoord lo, hi;
+    visibleRange(camera_.current(), lo, hi);
+    streamer_.update(origin_, lo, hi, kStreamBudget);
 }
 
 // ---- Rendering ----------------------------------------------------------
 void PlayingState::drawStars(const CameraView& v) {
     LineBatch& lines = r_.lines();
     lines.setView(r_.screenView());
+    const glm::dvec2 cam = absolutePosition(v.center);
+    const glm::dvec2 vp(v.viewport);
     for (const Star& s : stars_) {
         // Stars drift slower than the world to suggest depth, and wrap around the screen.
-        const glm::vec2 offset = -v.center * v.zoom * s.depth;
-        glm::vec2 p = s.unitPos * v.viewport + offset;
-        p.x = std::fmod(std::fmod(p.x, v.viewport.x) + v.viewport.x, v.viewport.x);
-        p.y = std::fmod(std::fmod(p.y, v.viewport.y) + v.viewport.y, v.viewport.y);
+        // Computed in double: the absolute camera position can be hundreds of thousands of units.
+        const glm::dvec2 raw = glm::dvec2(s.unitPos) * vp - cam * static_cast<double>(v.zoom * s.depth);
+        const glm::vec2 p(static_cast<float>(std::fmod(std::fmod(raw.x, vp.x) + vp.x, vp.x)),
+                          static_cast<float>(std::fmod(std::fmod(raw.y, vp.y) + vp.y, vp.y)));
         lines.line(p, p, colors::scaled(colors::white, s.brightness * 0.6f), 1.0f + s.depth * 15.0f);
     }
 }
@@ -292,11 +339,53 @@ void PlayingState::drawGrid(const CameraView& v) {
     const glm::vec2 br = v.screenToWorld(v.viewport);
     const glm::vec4 color = colors::scaled(colors::cyan, 0.14f);
 
+    // Grid lines sit at multiples of `spacing` in absolute coordinates, so they do not
+    // jump when the origin moves to a new sector.
+    const glm::dvec2 off = absolutePosition({0.0f, 0.0f});
+    const double sp = spacing;
     LineBatch& lines = r_.lines();
-    for (float x = std::floor(tl.x / spacing) * spacing; x <= br.x; x += spacing)
+    for (double k = std::floor((tl.x + off.x) / sp); k * sp - off.x <= br.x; k += 1.0) {
+        const float x = static_cast<float>(k * sp - off.x);
         lines.line({x, tl.y}, {x, br.y}, color, 1.0f);
-    for (float y = std::floor(tl.y / spacing) * spacing; y <= br.y; y += spacing)
+    }
+    for (double k = std::floor((tl.y + off.y) / sp); k * sp - off.y <= br.y; k += 1.0) {
+        const float y = static_cast<float>(k * sp - off.y);
         lines.line({tl.x, y}, {br.x, y}, color, 1.0f);
+    }
+}
+
+void PlayingState::drawSectorBorders(const CameraView& v) {
+    const glm::vec2 tl = v.screenToWorld({0.0f, 0.0f});
+    const glm::vec2 br = v.screenToWorld(v.viewport);
+    const glm::vec4 color = colors::scaled(colors::amber, 0.45f);
+    LineBatch& lines = r_.lines();
+    for (float i = std::ceil((tl.x + kSectorHalf) / kSectorSize);; i += 1.0f) {
+        const float x = i * kSectorSize - kSectorHalf;
+        if (x > br.x) break;
+        lines.line({x, tl.y}, {x, br.y}, color, 1.5f);
+    }
+    for (float i = std::ceil((tl.y + kSectorHalf) / kSectorSize);; i += 1.0f) {
+        const float y = i * kSectorSize - kSectorHalf;
+        if (y > br.y) break;
+        lines.line({tl.x, y}, {br.x, y}, color, 1.5f);
+    }
+}
+
+void PlayingState::drawSectorLabels(const CameraView& v) {
+    if (kSectorSize * v.zoom < kLabelMinSectorPixels) return;
+    SectorCoord lo, hi;
+    visibleRange(v, lo, hi);
+    r_.lines().setView(r_.screenView());
+    char buf[32];
+    for (int sy = lo.y; sy <= hi.y; ++sy)
+        for (int sx = lo.x; sx <= hi.x; ++sx) {
+            const glm::vec2 corner =
+                v.worldToScreen(sectorOffset({sx, sy}, origin_) + glm::vec2(-kSectorHalf, -kSectorHalf));
+            std::snprintf(buf, sizeof buf, "%d,%d", sx, sy);
+            const bool home = SectorCoord{sx, sy} == galaxy_.home;
+            r_.drawText(home ? std::string("HOME ") + buf : std::string(buf), corner + glm::vec2(8.0f, 8.0f),
+                        10.0f, colors::scaled(home ? colors::phosphor : colors::amber, 0.7f), 1.0f);
+        }
 }
 
 void PlayingState::drawDestination(const CameraView& v, double t) {
@@ -326,6 +415,89 @@ void PlayingState::drawDestination(const CameraView& v, double t) {
     lines.shape(circleShape_, Transform2D{.position = to, .scale = 4.0f * unit}, colors::amber, 1.5f);
 }
 
+void PlayingState::drawObject(const CameraView& v, const SectorObject& o, glm::vec2 offset, double t) {
+    LineBatch& lines = r_.lines();
+    const glm::vec2 pos = o.pos + offset;
+    const glm::vec4 color = tintColor(o.tint);
+    const float ft = static_cast<float>(t);
+    const float screenR = v.screenRadius(o.radius);
+
+    switch (o.kind) {
+    case ObjectKind::Star:
+        if (!v.isVisible(pos, o.radius * 1.8f)) return;
+        if (screenR < kDotRadiusPixels) {
+            lines.line(pos, pos, color, 5.0f);
+            return;
+        }
+        lines.shape(circleShape_, Transform2D{.position = pos, .scale = o.radius}, color, 2.5f);
+        lines.shape(circleShape_, Transform2D{.position = pos, .scale = o.radius * 1.3f},
+                    colors::scaled(color, 0.35f), 1.5f);
+        lines.shape(starCrossShape_,
+                    Transform2D{.position = pos, .rotation = ft * 0.05f, .scale = o.radius * 1.8f},
+                    colors::scaled(color, 0.8f), 1.5f);
+        break;
+    case ObjectKind::Planet:
+        drawShapeLod(lines, v, planetShape_, Transform2D{.position = pos, .scale = o.radius},
+                     o.radius, color, 2.0f);
+        break;
+    case ObjectKind::Rock:
+    case ObjectKind::Debris:
+        if (screenR < kMinDrawPixels) return;
+        drawShapeLod(lines, v, rockShapes_[static_cast<std::size_t>(o.variant)],
+                     Transform2D{.position = pos, .rotation = ft * o.spin, .scale = o.radius},
+                     o.radius, o.kind == ObjectKind::Debris ? colors::scaled(color, 0.55f) : color, 1.5f);
+        break;
+    case ObjectKind::Derelict:
+        drawShapeLod(lines, v, shipShape_,
+                     Transform2D{.position = pos,
+                                 .rotation = static_cast<float>(o.variant) + ft * o.spin,
+                                 .scale = o.radius * 1.4f},
+                     o.radius * 1.4f, colors::scaled(color, 0.7f), 1.6f);
+        break;
+    case ObjectKind::Anomaly: {
+        if (!v.isVisible(pos, o.radius * 2.0f)) return;
+        if (screenR < kDotRadiusPixels) {
+            lines.line(pos, pos, colors::cyan, 4.0f);
+            return;
+        }
+        for (int k = 0; k < 3; ++k) {
+            const float phase = std::fmod(ft * 0.5f + static_cast<float>(k) / 3.0f, 1.0f);
+            lines.shape(diamondShape_,
+                        Transform2D{.position = pos, .rotation = phase * 1.5f,
+                                    .scale = o.radius * (0.3f + 1.7f * phase)},
+                        colors::scaled(color, 1.0f - phase), 1.5f);
+        }
+        lines.shape(circleShape_, Transform2D{.position = pos, .scale = o.radius * 0.25f}, colors::white, 1.5f);
+        break;
+    }
+    case ObjectKind::Nebula:
+        if (!v.isVisible(pos, o.radius) || screenR < 3.0f) return;
+        for (int k = 0; k < 4; ++k)
+            lines.shape(rockShapes_[static_cast<std::size_t>((o.variant + k) % kShapeVariants)],
+                        Transform2D{.position = pos, .rotation = static_cast<float>(k) * 1.3f,
+                                    .scale = o.radius * (1.0f - 0.22f * static_cast<float>(k))},
+                        colors::scaled(color, 0.28f - 0.05f * static_cast<float>(k)), 1.5f);
+        break;
+    }
+}
+
+void PlayingState::drawSector(const CameraView& v, const Sector& sector, double t) {
+    const glm::vec2 offset = sectorOffset(sector.coord, origin_);
+    if (!v.isVisible(offset, kSectorHalf * 1.42f)) return;
+
+    if (sector.starIndex >= 0 && v.zoom < kOrbitMaxZoom) {
+        const glm::vec2 starPos = sector.objects[static_cast<std::size_t>(sector.starIndex)].pos;
+        for (const SectorObject& o : sector.objects) {
+            if (o.kind != ObjectKind::Planet) continue;
+            const float orbit = glm::length(o.pos - starPos);
+            if (v.screenRadius(orbit) < 12.0f) continue;
+            r_.lines().shape(orbitShape_, Transform2D{.position = starPos + offset, .scale = orbit},
+                             colors::scaled(colors::cyan, 0.10f), 1.0f);
+        }
+    }
+    for (const SectorObject& o : sector.objects) drawObject(v, o, offset, t);
+}
+
 void PlayingState::render(double alpha) {
     const double t = prevSimTime_ + (simTime_ - prevSimTime_) * alpha;
     const CameraView v = camera_.view(alpha);
@@ -334,33 +506,20 @@ void PlayingState::render(double alpha) {
     drawStars(v);
 
     lines.setView(r_.worldView(v.center, v.zoom));
-    drawGrid(v);
-
-    // Sector boundary.
-    const glm::vec4 boundary = colors::scaled(colors::amber, 0.45f);
-    const glm::vec2 a(-kSectorHalfWidth, -kSectorHalfHeight), b(kSectorHalfWidth, -kSectorHalfHeight);
-    const glm::vec2 c(kSectorHalfWidth, kSectorHalfHeight), d(-kSectorHalfWidth, kSectorHalfHeight);
-    lines.line(a, b, boundary, 1.5f);
-    lines.line(b, c, boundary, 1.5f);
-    lines.line(c, d, boundary, 1.5f);
-    lines.line(d, a, boundary, 1.5f);
-
-    for (const Planet& p : planets_)
-        drawShapeLod(lines, v, planetShape_, Transform2D{.position = p.pos, .scale = p.radius},
-                     p.radius, p.color, 2.0f);
-
-    for (int i = 0; i < rockCount_; ++i) {
-        const Rock& rock = rocks_[static_cast<std::size_t>(i)];
-        drawShapeLod(lines, v, rockShapes_[static_cast<std::size_t>(rock.variant)],
-                     Transform2D{.position = rock.pos,
-                                 .rotation = static_cast<float>(t) * rock.spin,
-                                 .scale = rock.radius},
-                     rock.radius, colors::amber, 1.5f);
+    if (showGrid_) {
+        drawGrid(v);
+        drawSectorBorders(v);
     }
 
+    SectorCoord lo, hi;
+    visibleRange(v, lo, hi);
+    for (int sy = lo.y; sy <= hi.y; ++sy)
+        for (int sx = lo.x; sx <= hi.x; ++sx)
+            if (const Sector* s = streamer_.find({sx, sy})) drawSector(v, *s, t);
+
     // Selection ring (at least 12 screen points wide so small objects stay findable).
-    if (selectionValid()) {
-        const float ringRadius = std::max(selectionRadius() * 1.35f, 12.0f / v.zoom);
+    if (const SectorObject* sel = selectedObject()) {
+        const float ringRadius = std::max(sel->radius * 1.35f, 12.0f / v.zoom);
         lines.shape(circleShape_,
                     Transform2D{.position = selectionPos(),
                                 .rotation = static_cast<float>(t) * 0.5f,
@@ -392,6 +551,7 @@ void PlayingState::render(double alpha) {
                             .scale = std::max(kShipScale, kShipIconPixels / v.zoom)},
                 colors::phosphor, 2.5f);
 
+    if (showGrid_) drawSectorLabels(v);
     hud_.render(r_, hudState());
 }
 
