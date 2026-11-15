@@ -28,7 +28,7 @@ struct SectorCoordHash {
 constexpr float kSectorSize = 6000.0f;
 constexpr float kSectorHalf = kSectorSize * 0.5f;
 
-enum class ObjectKind { Star, Planet, Rock, Debris, Derelict, Anomaly, Nebula };
+enum class ObjectKind { Star, Planet, Rock, Debris, Derelict, Anomaly, Nebula, Mine, BlackHole };
 
 // Palette slot; the renderer maps it to an actual colour (keeps this module GL/colour free).
 enum class Tint { Cyan, Amber, Phosphor, Red, White };

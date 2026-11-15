@@ -53,3 +53,18 @@ World space is relative to the "origin sector". When the ship leaves it, `Playin
 
 ## D16: Home hint
 Home is 30-45 sectors from the start in a seeded direction. The player only gets an 8-way compass heading and a distance rounded to 5 sectors (`homeHint`). M8 will add ways to refine this.
+
+## D17: Simulation split
+`Simulation` (src/sim) is headless and owns the world: galaxy, streamer, origin, player ship and vitals, aliens, projectiles, hazards, director and an event queue. It is origin-relative; the caller applies `takeOriginShift()` to camera, exhaust and bursts. `PlayingState` is only input, rendering and HUD.
+
+## D18: Collisions and hazards
+Circle-only collisions via a 30x30 `SectorGrid` broadphase (polygon narrow-phase deferred). Solids push the ship out with restitution 0.4; impact damage is (normal speed - 40) * 0.25, tripled for stars. Mines trigger at radius + 45, blast 140 units for 35 damage, once (persisted in `destroyed_`). Black holes pull linearly out to 8 horizon radii and deal 30 piercing damage/s inside. Nebulae add 0.6/s drag, stop shield regen and halve alien sensor range; red nebulae drain 3 shield/s then 1 hull/s.
+
+## D19: Vitals and weapons
+Shield absorbs first and regenerates after 4 s undamaged; piercing damage bypasses it. The turret fires at the selected alien with lead aim (damage 12, cooldown 0.35 s, range 750), only if FIRE: FREE is on or the alien is hostile/provoked.
+
+## D20: Aliens and director
+Alien types are data (`assets/data/aliens.json`, roles raider/trader/passer/distress). AI states: Idle, Patrol, Hail, Flee, Pursue, Attack, Trade; aliens flee once below 25% strength. `EncounterDirector` runs one encounter at a time (first at 20 s, then ~75 s +-40%, longer after combat, max 6 aliens). Difficulty = 1 + distance from start / 25.
+
+## D21: Placeholder rewards
+Accepting a hail gives +30 hull and full shield (trader) or +15 hull (survivors). M8 replaces this with resources.

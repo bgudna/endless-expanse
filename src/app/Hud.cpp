@@ -35,6 +35,7 @@ void Hud::layout(glm::vec2 screenSize, const HudState& state) {
     labels_[Pause] = "PAUSE";
     labels_[Bloom] = std::string("BLOOM ") + toString(state.bloom);
     labels_[Grid] = state.showGrid ? "GRID ON" : "GRID OFF";
+    labels_[Weapons] = state.weaponsFree ? "FIRE: FREE" : "FIRE: HOSTILE ONLY";
 
     float x = kMargin;
     const float y = screenSize.y - kMargin - kButtonHeight;
@@ -50,6 +51,14 @@ void Hud::layout(glm::vec2 screenSize, const HudState& state) {
     sliderBottom_ = std::max(sliderTop_ + 60.0f, screenSize.y - 130.0f);
     sliderHit_ = {{sliderX_ - 16.0f, sliderTop_ - 10.0f},
                   {32.0f, sliderBottom_ - sliderTop_ + 20.0f}};
+
+    hailShown_ = state.hailActive;
+    const glm::vec2 panelSize(520.0f, 120.0f);
+    hailPanel_ = {{screenSize.x * 0.5f - panelSize.x * 0.5f, 90.0f}, panelSize};
+    const glm::vec2 btn(150.0f, kButtonHeight);
+    const float by = hailPanel_.pos.y + panelSize.y - btn.y - 14.0f;
+    hailAcceptBtn_ = {{hailPanel_.pos.x + panelSize.x * 0.5f - btn.x - 10.0f, by}, btn};
+    hailDeclineBtn_ = {{hailPanel_.pos.x + panelSize.x * 0.5f + 10.0f, by}, btn};
 }
 
 HudEvents Hud::handleInput(const InputState& input) {
@@ -67,7 +76,17 @@ HudEvents Hud::handleInput(const InputState& input) {
         case Pause: ev.pause = true; break;
         case Bloom: ev.cycleBloom = true; break;
         case Grid: ev.toggleGrid = true; break;
+        case Weapons: ev.toggleWeapons = true; break;
         default: break;
+        }
+    }
+
+    bool overPanel = false;
+    if (hailShown_) {
+        overPanel = hailPanel_.contains(mouse_);
+        if (input.pressed[InputState::Left]) {
+            if (hailAcceptBtn_.contains(mouse_)) ev.hailAccept = true;
+            if (hailDeclineBtn_.contains(mouse_)) ev.hailDecline = true;
         }
     }
 
@@ -78,7 +97,7 @@ HudEvents Hud::handleInput(const InputState& input) {
         ev.zoomUnit = std::clamp(t, 0.0f, 1.0f);
     }
 
-    ev.consumedMouse = overButton || dragging_ || sliderHit_.contains(mouse_);
+    ev.consumedMouse = overButton || overPanel || dragging_ || sliderHit_.contains(mouse_);
     return ev;
 }
 
@@ -129,6 +148,47 @@ void Hud::render(Renderer& r, const HudState& state) const {
 
     if (!state.info.empty())
         r.drawText(state.info, {kMargin, 84.0f}, 11.0f, colors::scaled(colors::phosphor, 0.9f), 1.2f);
+
+    // Hull and shield bars (top centre).
+    {
+        const float w = 220.0f, h = 9.0f, x = screen_.x * 0.5f - w * 0.5f + 20.0f;
+        auto bar = [&](float y, const char* label, float frac, const glm::vec4& color) {
+            r.drawText(label, {x - 66.0f, y - 1.0f}, 10.0f, color, 1.1f);
+            drawRect(lines, {{x, y}, {w, h}}, colors::scaled(color, 0.6f), 1.2f);
+            const float fill = std::clamp(frac, 0.0f, 1.0f) * (w - 4.0f);
+            if (fill > 0.5f)
+                lines.line({x + 2.0f, y + h * 0.5f}, {x + 2.0f + fill, y + h * 0.5f}, color, h - 3.0f);
+        };
+        const bool low = state.hull < 0.3f;
+        bar(46.0f, "HULL", state.hull, low ? colors::red : colors::phosphor);
+        bar(62.0f, "SHIELD", state.shield, colors::cyan);
+        if (!state.status.empty())
+            r.drawTextCentered(state.status, {screen_.x * 0.5f, 86.0f}, 11.0f, colors::amber, 1.2f);
+    }
+
+    if (state.messageAlpha > 0.01f && !state.message.empty())
+        r.drawTextCentered(state.message, {screen_.x * 0.5f, screen_.y - 70.0f}, 13.0f,
+                           colors::scaled(colors::white, state.messageAlpha), 1.3f);
+
+    if (hailShown_) {
+        drawRect(lines, hailPanel_, colors::amber, 1.8f);
+        r.drawTextCentered(state.hailTitle, hailPanel_.pos + glm::vec2(hailPanel_.size.x * 0.5f, 22.0f), 13.0f,
+                           colors::amber, 1.4f);
+        r.drawTextCentered(state.hailText, hailPanel_.pos + glm::vec2(hailPanel_.size.x * 0.5f, 48.0f), 10.0f,
+                           colors::white, 1.1f);
+        const Rect* btns[2] = {&hailAcceptBtn_, &hailDeclineBtn_};
+        const std::string labels[2] = {state.hailAccept, "DECLINE"};
+        for (int i = 0; i < 2; ++i) {
+            const glm::vec4 c = btns[i]->contains(mouse_) ? colors::amber : colors::scaled(colors::phosphor, 0.8f);
+            drawRect(lines, *btns[i], c, 1.5f);
+            r.drawTextCentered(labels[i], btns[i]->pos + btns[i]->size * 0.5f, kButtonTextHeight, c, 1.3f);
+        }
+    }
+
+    if (state.shipDestroyed) {
+        r.drawTextCentered("SHIP DESTROYED", screen_ * 0.5f - glm::vec2(0.0f, 20.0f), 44.0f, colors::red, 2.4f);
+        r.drawTextCentered("CLICK TO RESTART", screen_ * 0.5f + glm::vec2(0.0f, 36.0f), 16.0f, colors::amber, 1.5f);
+    }
 }
 
 } // namespace ee

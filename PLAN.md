@@ -145,7 +145,7 @@ Each milestone lists **tasks**, **deliverables**, and **acceptance criteria**. A
 **Acceptance**
 - The same seed always produces the same sector (tested). Crossing sector borders is seamless.
 
-### M6: Hazards, Aliens and Encounters
+### M6: Hazards, Aliens and Encounters (implemented; awaiting on-screen review. Collision is circle-only, polygon narrow phase deferred)
 **Tasks**
 - Collision system (broadphase grid, circle/polygon narrow phase) and damage.
 - Hazards: asteroids, radiation/nebula zones (shield or sensor effects), black-hole gravity wells, mines.

@@ -28,8 +28,14 @@ The first configure fetches doctest and glm from GitHub. Other platforms need an
 | Zoom slider (right edge) | Drag to zoom |
 | HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, GRID on/off (sector borders, labels, grid) |
 | Middle-click (no drag) | Toggle the on-screen FPS / frame-time / segment-count readout |
+| Left-click an alien | Select and target it (turret auto-fires per the Weapons toggle) |
+| Weapons button | FIRE: FREE / FIRE: HOSTILE ONLY |
+| Hail panel | Click Accept / Decline when a trader or survivor hails |
+| Left-click after ship destroyed | Restart |
 | Left-click while paused | Resume |
 | Right-click while paused | Back to the main menu |
+
+Alien types are defined in `assets/data/aliens.json`. Hazards: rocks, mines, black holes, radiation nebulae.
 
 ## Layout
 

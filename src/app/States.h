@@ -7,6 +7,7 @@
 #include "render/Renderer.h"
 #include "sim/ExhaustTrail.h"
 #include "sim/Ship.h"
+#include "sim/Simulation.h"
 #include "vector/VectorShape.h"
 #include "world/Galaxy.h"
 #include "world/SectorStreamer.h"
@@ -48,9 +49,10 @@ private:
     double prevTime_ = 0.0;
 };
 
-// Playing: an endless procedurally generated galaxy streamed in sectors.
+// Playing: an endless procedurally generated galaxy with hazards, aliens and combat.
 //   wheel: zoom   left-drag / middle-drag: pan   right-click (or hold): fly there
-//   left-click: select   double-click: fly to the selected object
+//   left-click: select / target   double-click: fly to the selected object
+// All game rules live in the headless Simulation; this class is input, camera and drawing.
 class PlayingState : public GameState {
 public:
     explicit PlayingState(Renderer& r, std::uint64_t galaxySeed = 20260101);
@@ -64,11 +66,20 @@ private:
         float depth;       // parallax factor
         float brightness;
     };
-    // Identified by absolute sector coordinates, so it survives origin shifts.
+    // A world object is identified by absolute sector coordinates (survives origin shifts);
+    // an alien by its id.
     struct Selection {
-        bool valid = false;
+        enum class Kind { None, Object, Alien } kind = Kind::None;
         SectorCoord sector;
         std::size_t index = 0;
+        int alienId = -1;
+    };
+    // Short-lived explosion / impact effect (cosmetic only).
+    struct Burst {
+        glm::vec2 pos;
+        float age;
+        float life;
+        float size;
     };
 
     HudState hudState() const;
@@ -79,29 +90,37 @@ private:
     void drawDestination(const CameraView& v, double t);
     void drawSector(const CameraView& v, const Sector& sector, double t);
     void drawObject(const CameraView& v, const SectorObject& o, glm::vec2 offset, double t);
+    void drawAliens(const CameraView& v, double alpha, double t);
+    void drawProjectilesAndBursts(const CameraView& v, double alpha);
+    void drawShieldFlash(const CameraView& v, glm::vec2 pos, float radius, const Vitals& vit);
 
     void visibleRange(const CameraView& v, SectorCoord& lo, SectorCoord& hi) const;
-    void rebaseOrigin();
-    glm::dvec2 absolutePosition(glm::vec2 local) const;
+    void processEvents();
 
     Selection pick(const CameraView& v, glm::vec2 screenPoint) const;
     const SectorObject* selectedObject() const;
+    const AlienShip* selectedAlien() const;
+    bool hasSelection() const { return selectedObject() || selectedAlien(); }
     glm::vec2 selectionPos() const;
+    float selectionRadius() const;
     std::string selectionName() const;
     void flyToSelection();
 
     Renderer& r_;
+    std::uint64_t seed_;
     Camera2D camera_;
     Hud hud_;
-    Ship ship_;
+    Simulation sim_;
     ExhaustTrail exhaust_;
     Random rng_{777};
-    Galaxy galaxy_;
-    SectorStreamer streamer_;
-    SectorCoord origin_; // the sector whose centre is world (0, 0)
-    VectorShape shipShape_, planetShape_, circleShape_, orbitShape_, diamondShape_, starCrossShape_;
+    VectorShape shipShape_, planetShape_, circleShape_, orbitShape_, diamondShape_, starCrossShape_,
+        mineShape_, holeShape_;
     std::vector<VectorShape> rockShapes_;
+    std::vector<VectorShape> alienShapes_;
     std::vector<Star> stars_;
+    std::vector<Burst> bursts_;
+    std::string message_;
+    float messageAge_ = 99.0f;
     bool follow_ = true;
     bool showGrid_ = true;
     Selection selection_;

@@ -27,6 +27,18 @@ struct HudState {
     bool follow = true;
     bool showGrid = true;
     bool dragAssist = true;
+    bool weaponsFree = false;
+    float hull = 1.0f;   // 0..1
+    float shield = 1.0f; // 0..1
+    std::string status;  // short warning under the bars (nebula, radiation, ...)
+    std::string message; // latest event message, fades with messageAlpha
+    float messageAlpha = 0.0f;
+    bool shipDestroyed = false;
+    // Incoming hail (trader / distress call); shown as a panel with two buttons.
+    bool hailActive = false;
+    std::string hailTitle;
+    std::string hailText;
+    std::string hailAccept;
     glm::vec2 mouseWorld{0.0f};
     std::string info; // multi-line ship / selection readout (left side)
 };
@@ -39,6 +51,9 @@ struct HudEvents {
     bool pause = false;
     bool cycleBloom = false;
     bool toggleGrid = false;
+    bool toggleWeapons = false;
+    bool hailAccept = false;
+    bool hailDecline = false;
     float zoomUnit = -1.0f; // >= 0 when the slider moved
 };
 
@@ -46,7 +61,7 @@ struct HudEvents {
 // (A reusable UI toolkit arrives in M9.)
 class Hud {
 public:
-    enum Button { Follow, Assist, Pause, Bloom, Grid, ButtonCount };
+    enum Button { Follow, Assist, Pause, Bloom, Grid, Weapons, ButtonCount };
 
     void layout(glm::vec2 screenSize, const HudState& state);
     HudEvents handleInput(const InputState& input);
@@ -56,6 +71,8 @@ private:
     Rect buttons_[ButtonCount];
     std::string labels_[ButtonCount];
     Rect sliderHit_;
+    Rect hailPanel_, hailAcceptBtn_, hailDeclineBtn_;
+    bool hailShown_ = false;
     float sliderTop_ = 0.0f;
     float sliderBottom_ = 0.0f;
     float sliderX_ = 0.0f;

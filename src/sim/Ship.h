@@ -42,6 +42,11 @@ public:
 
     void teleport(glm::vec2 position, float heading);
     void setVelocity(glm::vec2 v) { vel_ = v; }
+    // Instantly move the ship (e.g. collision push-out) without disturbing interpolation.
+    void nudge(glm::vec2 delta) {
+        pos_ += delta;
+        prevPos_ += delta;
+    }
     // Floating-origin rebase: move everything the ship remembers by `delta` (no visible jump).
     void shiftOrigin(glm::vec2 delta) {
         pos_ += delta;

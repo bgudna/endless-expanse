@@ -43,7 +43,7 @@ public:
         if (isStart && glm::length(p) < r + kStartKeepOut) return false;
         for (const SectorObject& o : s.objects) {
             if (o.kind == ObjectKind::Rock || o.kind == ObjectKind::Debris ||
-                o.kind == ObjectKind::Nebula)
+                o.kind == ObjectKind::Nebula || o.kind == ObjectKind::Mine)
                 continue;
             if (glm::length(p - o.pos) < r + o.radius + margin) return false;
         }
@@ -139,6 +139,25 @@ public:
         }
     }
 
+    // Appended last so adding hazards did not change the layout of anything generated before.
+    void makeHazards() {
+        if (rng.nextFloat() < 0.03f) {
+            const glm::vec2 p{rng.range(-0.35f, 0.35f) * kSectorSize, rng.range(-0.35f, 0.35f) * kSectorSize};
+            if (clear(p, 40.0f, 450.0f))
+                add(ObjectKind::BlackHole, p, 40.0f, 0.0f, randInt(rng, 0, kShapeVariants - 1), Tint::White);
+        }
+        if (rng.nextFloat() < 0.05f) {
+            const glm::vec2 c{rng.range(-0.4f, 0.4f) * kSectorSize, rng.range(-0.4f, 0.4f) * kSectorSize};
+            const int count = randInt(rng, 8, 20);
+            for (int i = 0; i < count; ++i) {
+                const glm::vec2 p =
+                    clampToSector(c + unitVec(rng.range(0.0f, 2.0f * kPi)) * rng.range(0.0f, 350.0f), 9.0f);
+                if (clear(p, 9.0f, 30.0f))
+                    add(ObjectKind::Mine, p, 9.0f, 0.0f, randInt(rng, 0, kShapeVariants - 1), Tint::Red);
+            }
+        }
+    }
+
     Random rng;
     bool isStart;
     Sector s;
@@ -158,6 +177,7 @@ Sector generateSector(std::uint64_t galaxySeed, SectorCoord c) {
     b.makeAsteroidFields();
     b.makeDebris();
     b.makeSolitaries();
+    b.makeHazards();
     return std::move(b.s);
 }
 
@@ -170,6 +190,8 @@ const char* objectKindName(ObjectKind kind) {
     case ObjectKind::Derelict: return "DERELICT";
     case ObjectKind::Anomaly: return "ANOMALY";
     case ObjectKind::Nebula: return "NEBULA";
+    case ObjectKind::Mine: return "MINE";
+    case ObjectKind::BlackHole: return "BLACK HOLE";
     }
     return "OBJECT";
 }

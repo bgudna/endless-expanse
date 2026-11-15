@@ -25,6 +25,11 @@ FetchContent_Declare(glm
     SYSTEM)
 FetchContent_MakeAvailable(glm)
 
+FetchContent_Declare(nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    SYSTEM)
+FetchContent_MakeAvailable(nlohmann_json)
+
 if(EE_BUILD_TESTS)
     FetchContent_Declare(doctest
         GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -40,6 +45,12 @@ add_library(ee_core STATIC
     src/camera/Camera2D.cpp
     src/sim/Ship.cpp
     src/sim/ExhaustTrail.cpp
+    src/sim/Vitals.cpp
+    src/sim/Spatial.cpp
+    src/sim/AlienType.cpp
+    src/sim/Alien.cpp
+    src/sim/Director.cpp
+    src/sim/Simulation.cpp
     src/vector/VectorShape.cpp
     src/vector/Shapes.cpp
     src/vector/StrokeFont.cpp
@@ -47,7 +58,7 @@ add_library(ee_core STATIC
     src/world/Galaxy.cpp
     src/world/SectorStreamer.cpp)
 target_include_directories(ee_core PUBLIC src)
-target_link_libraries(ee_core PUBLIC glm::glm)
+target_link_libraries(ee_core PUBLIC glm::glm nlohmann_json::nlohmann_json)
 ee_enable_warnings(ee_core)
 
 # ---- Game executable --------------------------------------------------------
@@ -56,6 +67,7 @@ add_executable(endless_expanse
     src/app/Application.cpp
     src/app/States.cpp
     src/app/Hud.cpp
+    src/app/Assets.cpp
     src/platform/Window.cpp
     src/platform/Input.cpp
     src/render/Shader.cpp
@@ -63,6 +75,7 @@ add_executable(endless_expanse
     src/render/PostProcess.cpp
     src/render/Renderer.cpp)
 target_link_libraries(endless_expanse PRIVATE ee_core SDL2::SDL2)
+target_compile_definitions(endless_expanse PRIVATE EE_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
 if(TARGET SDL2::SDL2main)
     target_link_libraries(endless_expanse PRIVATE SDL2::SDL2main)
 endif()

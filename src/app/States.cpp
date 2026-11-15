@@ -1,5 +1,6 @@
 #include "app/States.h"
 
+#include "app/Assets.h"
 #include "core/MathUtil.h"
 #include "core/Random.h"
 #include "vector/Shapes.h"
@@ -13,8 +14,10 @@ namespace ee {
 
 namespace {
 constexpr int kStarCount = 500;
+constexpr int kAlienShapes = 5;
+constexpr float kMessageSeconds = 5.5f;
 constexpr int kMaxLoadRadius = 4;      // never keep more than 9x9 sectors around the ship
-constexpr int kStreamBudget = 4;       // non-essential sectors generated per simulation step
+
 constexpr float kOrbitMaxZoom = 0.6f;  // orbit rings are hidden when zoomed closer (polygon edges show)
 constexpr float kLabelMinSectorPixels = 150.0f;
 constexpr float kGridBaseSpacing = 500.0f;
@@ -93,50 +96,32 @@ void MainMenuState::render(double alpha) {
 
 // ---- Playing ------------------------------------------------------------
 PlayingState::PlayingState(Renderer& r, std::uint64_t galaxySeed)
-    : r_(r), galaxy_(makeGalaxy(galaxySeed)), streamer_(galaxySeed), shipShape_(shapes::ship()),
+    : r_(r), seed_(galaxySeed), sim_(galaxySeed, loadAlienTypes()), shipShape_(shapes::ship()),
       planetShape_(shapes::planet()), circleShape_(shapes::circle(24)),
       orbitShape_(shapes::circle(96)), diamondShape_(shapes::ngon(4)),
-      starCrossShape_(shapes::starCross()) {
+      starCrossShape_(shapes::starCross()), mineShape_(shapes::mine()),
+      holeShape_(shapes::blackHole()) {
     for (int i = 0; i < kShapeVariants; ++i)
         rockShapes_.push_back(shapes::asteroid(static_cast<std::uint64_t>(i) + 1));
+    for (int i = 0; i < kAlienShapes; ++i) alienShapes_.push_back(shapes::alien(i));
 
     Random rng(12345);
     for (int i = 0; i < kStarCount; ++i)
         stars_.push_back({{rng.nextFloat(), rng.nextFloat()}, rng.range(0.01f, 0.08f),
                           rng.range(0.25f, 0.9f)});
 
-    ship_.teleport({0.0f, 0.0f}, -kPi / 2.0f);
-    camera_.snapTo(ship_.position(), 1.0f);
-    streamer_.update(origin_, origin_, origin_, 0);
-}
-
-glm::dvec2 PlayingState::absolutePosition(glm::vec2 local) const {
-    return glm::dvec2(origin_.x, origin_.y) * static_cast<double>(kSectorSize) + glm::dvec2(local);
+    camera_.snapTo(sim_.player().position(), 1.0f);
 }
 
 void PlayingState::visibleRange(const CameraView& v, SectorCoord& lo, SectorCoord& hi) const {
+    const SectorCoord origin = sim_.origin();
     const glm::vec2 tl = v.screenToWorld({0.0f, 0.0f});
     const glm::vec2 br = v.screenToWorld(v.viewport);
     const auto index = [](float w) { return static_cast<int>(std::floor((w + kSectorHalf) / kSectorSize)); };
-    lo = {std::clamp(origin_.x + index(tl.x), origin_.x - kMaxLoadRadius, origin_.x + kMaxLoadRadius),
-          std::clamp(origin_.y + index(tl.y), origin_.y - kMaxLoadRadius, origin_.y + kMaxLoadRadius)};
-    hi = {std::clamp(origin_.x + index(br.x), origin_.x - kMaxLoadRadius, origin_.x + kMaxLoadRadius),
-          std::clamp(origin_.y + index(br.y), origin_.y - kMaxLoadRadius, origin_.y + kMaxLoadRadius)};
-}
-
-// Keep the ship's coordinates small: when it leaves the origin sector, move the origin to
-// the sector it entered and shift everything else by the opposite amount.
-void PlayingState::rebaseOrigin() {
-    const glm::vec2 p = ship_.position();
-    const int dx = static_cast<int>(std::floor((p.x + kSectorHalf) / kSectorSize));
-    const int dy = static_cast<int>(std::floor((p.y + kSectorHalf) / kSectorSize));
-    if (dx == 0 && dy == 0) return;
-    const glm::vec2 shift(-static_cast<float>(dx) * kSectorSize, -static_cast<float>(dy) * kSectorSize);
-    origin_.x += dx;
-    origin_.y += dy;
-    ship_.shiftOrigin(shift);
-    camera_.shiftOrigin(shift);
-    exhaust_.shiftOrigin(shift);
+    lo = {std::clamp(origin.x + index(tl.x), origin.x - kMaxLoadRadius, origin.x + kMaxLoadRadius),
+          std::clamp(origin.y + index(tl.y), origin.y - kMaxLoadRadius, origin.y + kMaxLoadRadius)};
+    hi = {std::clamp(origin.x + index(br.x), origin.x - kMaxLoadRadius, origin.x + kMaxLoadRadius),
+          std::clamp(origin.y + index(br.y), origin.y - kMaxLoadRadius, origin.y + kMaxLoadRadius)};
 }
 
 // ---- Selection ----------------------------------------------------------
@@ -151,11 +136,12 @@ PlayingState::Selection PlayingState::pick(const CameraView& v, glm::vec2 screen
     float bestScore = 1e30f;
     for (int sy = lo.y; sy <= hi.y; ++sy)
         for (int sx = lo.x; sx <= hi.x; ++sx) {
-            const Sector* sector = streamer_.find({sx, sy});
+            const Sector* sector = sim_.streamer().find({sx, sy});
             if (!sector) continue;
-            const glm::vec2 offset = sectorOffset(sector->coord, origin_);
+            const glm::vec2 offset = sectorOffset(sector->coord, sim_.origin());
             for (std::size_t i = 0; i < sector->objects.size(); ++i) {
                 const SectorObject& o = sector->objects[i];
+                if (sim_.isDestroyed(sector->coord, i)) continue;
                 const float d = glm::length(world - (o.pos + offset));
                 if (d > std::max(o.radius, tolerance)) continue;
                 // Prefer the object whose edge is nearest; nebulae are a backdrop, so
@@ -164,70 +150,130 @@ PlayingState::Selection PlayingState::pick(const CameraView& v, glm::vec2 screen
                 if (o.kind == ObjectKind::Nebula) score += 1.0e5f;
                 if (score < bestScore) {
                     bestScore = score;
-                    best = {true, sector->coord, i};
+                    best = {};
+                    best.kind = Selection::Kind::Object;
+                    best.sector = sector->coord;
+                    best.index = i;
                 }
             }
         }
+    // Ships are the thing you most often want to click: they win ties against scenery.
+    for (const AlienShip& a : sim_.aliens()) {
+        const float d = glm::length(world - a.body.position());
+        if (d > std::max(a.type->radius, tolerance * 1.5f)) continue;
+        const float score = d - a.type->radius - 50.0f;
+        if (score < bestScore) {
+            bestScore = score;
+            best = {};
+            best.kind = Selection::Kind::Alien;
+            best.alienId = a.id;
+        }
+    }
     return best;
 }
 
 const SectorObject* PlayingState::selectedObject() const {
-    if (!selection_.valid) return nullptr;
-    const Sector* s = streamer_.find(selection_.sector);
-    if (!s || selection_.index >= s->objects.size()) return nullptr;
+    if (selection_.kind != Selection::Kind::Object) return nullptr;
+    const Sector* s = sim_.streamer().find(selection_.sector);
+    if (!s || selection_.index >= s->objects.size() ||
+        sim_.isDestroyed(selection_.sector, selection_.index))
+        return nullptr;
     return &s->objects[selection_.index];
 }
 
+const AlienShip* PlayingState::selectedAlien() const {
+    return selection_.kind == Selection::Kind::Alien ? sim_.findAlien(selection_.alienId) : nullptr;
+}
+
 glm::vec2 PlayingState::selectionPos() const {
-    return selectedObject()->pos + sectorOffset(selection_.sector, origin_);
+    if (const AlienShip* a = selectedAlien()) return a->body.position();
+    return selectedObject()->pos + sectorOffset(selection_.sector, sim_.origin());
+}
+
+float PlayingState::selectionRadius() const {
+    if (const AlienShip* a = selectedAlien()) return a->type->radius;
+    return selectedObject()->radius;
 }
 
 std::string PlayingState::selectionName() const {
+    if (const AlienShip* a = selectedAlien()) return a->type->name;
     return std::string(objectKindName(selectedObject()->kind)) + " " +
            std::to_string(selection_.sector.x) + "," + std::to_string(selection_.sector.y) + "-" +
            std::to_string(selection_.index + 1);
 }
 
 void PlayingState::flyToSelection() {
-    const SectorObject* o = selectedObject();
-    if (!o) return;
-    glm::vec2 away = ship_.position() - selectionPos();
+    if (!hasSelection()) return;
+    const Ship& ship = sim_.player();
+    glm::vec2 away = ship.position() - selectionPos();
     const float len = glm::length(away);
     away = len > 1e-3f ? away / len : glm::vec2(1.0f, 0.0f);
-    const float standoff = o->kind == ObjectKind::Nebula ? 0.0f : o->radius + kStandoffDistance;
-    ship_.setDestination(selectionPos() + away * standoff);
+    const SectorObject* o = selectedObject();
+    const float standoff =
+        (o && o->kind == ObjectKind::Nebula) ? 0.0f : selectionRadius() + kStandoffDistance;
+    sim_.player().setDestination(selectionPos() + away * standoff);
 }
 
 HudState PlayingState::hudState() const {
     HudState s;
+    const Ship& ship = sim_.player();
     const CameraView cv = camera_.current();
     s.zoom = cv.zoom;
     s.zoomUnit = Camera2D::zoomToUnit(camera_.targetZoom());
     s.bloom = r_.bloomQuality();
-    s.objects = static_cast<int>(streamer_.loadedObjectCount());
-    s.sectorsLoaded = static_cast<int>(streamer_.loadedCount());
+    s.objects = static_cast<int>(sim_.streamer().loadedObjectCount());
+    s.sectorsLoaded = static_cast<int>(sim_.streamer().loadedCount());
     s.follow = follow_;
     s.showGrid = showGrid_;
-    s.dragAssist = ship_.dragAssist();
-    const glm::dvec2 abs = absolutePosition(cv.screenToWorld(mouse_));
+    s.dragAssist = ship.dragAssist();
+    s.weaponsFree = sim_.weaponsFree();
+    s.hull = sim_.vitals().hullFraction();
+    s.shield = sim_.vitals().shieldFraction();
+    s.shipDestroyed = !sim_.playerAlive();
+    s.message = message_;
+    s.messageAlpha = std::clamp((kMessageSeconds - messageAge_) / 1.5f, 0.0f, 1.0f);
+    if (sim_.playerInRadiation()) s.status = "RADIATION: SHIELDS DRAINING";
+    else if (sim_.playerInNebula()) s.status = "NEBULA: SHIELDS OFFLINE, SENSORS DEGRADED";
+
+    if (const AlienShip* h = sim_.hailingAlien()) {
+        s.hailActive = true;
+        s.hailTitle = h->type->name + " HAILING";
+        if (h->type->role == Role::Distress) {
+            s.hailText = "SURVIVORS ASK FOR ASSISTANCE. SHARE SUPPLIES?";
+            s.hailAccept = "ASSIST";
+        } else {
+            s.hailText = "THEY OFFER TO TRADE SUPPLIES FOR REPAIRS.";
+            s.hailAccept = "TRADE";
+        }
+    }
+
+    const glm::dvec2 abs = sim_.absolutePosition(cv.screenToWorld(mouse_));
     s.mouseWorld = {static_cast<float>(abs.x), static_cast<float>(abs.y)};
 
     char buf[160];
-    std::snprintf(buf, sizeof buf, "SECTOR %d,%d\n", origin_.x, origin_.y);
+    std::snprintf(buf, sizeof buf, "SECTOR %d,%d\n", sim_.origin().x, sim_.origin().y);
     s.info = buf;
-    s.info += homeHintText(homeHint(galaxy_, origin_));
-    std::snprintf(buf, sizeof buf, "\n\nSPEED %.0f", static_cast<double>(ship_.speed()));
+    s.info += homeHintText(homeHint(sim_.galaxy(), sim_.origin()));
+    std::snprintf(buf, sizeof buf, "\n\nSPEED %.0f", static_cast<double>(ship.speed()));
     s.info += buf;
-    if (ship_.hasDestination()) {
-        std::snprintf(buf, sizeof buf, "\nDESTINATION %.0f", static_cast<double>(ship_.distanceToDestination()));
+    if (ship.hasDestination()) {
+        std::snprintf(buf, sizeof buf, "\nDESTINATION %.0f", static_cast<double>(ship.distanceToDestination()));
         s.info += buf;
     }
-    if (const SectorObject* o = selectedObject()) {
-        const float dist = glm::length(selectionPos() - ship_.position());
+    if (hasSelection()) {
+        const float dist = glm::length(selectionPos() - ship.position());
         std::snprintf(buf, sizeof buf, "\n\nSELECTED %s\nDISTANCE %.0f  RADIUS %.0f",
                       selectionName().c_str(), static_cast<double>(dist),
-                      static_cast<double>(o->radius));
+                      static_cast<double>(selectionRadius()));
         s.info += buf;
+        if (const AlienShip* a = selectedAlien()) {
+            std::snprintf(buf, sizeof buf, "\n%s  %s\nHULL %.0f%%  SHIELD %.0f%%",
+                          roleName(a->type->role), aiStateName(a->state),
+                          static_cast<double>(a->vitals.hullFraction() * 100.0f),
+                          static_cast<double>(a->vitals.shieldFraction() * 100.0f));
+            s.info += buf;
+            if (a->type->damage > 0.0f && dist > sim_.weapon().range) s.info += "\nOUT OF WEAPON RANGE";
+        }
     }
     return s;
 }
@@ -241,11 +287,19 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
     hud_.layout(screen, hudState());
     const HudEvents ev = hud_.handleInput(input);
 
+    if (!sim_.playerAlive() && input.pressed[InputState::Left] && !ev.consumedMouse) {
+        stack.replace(std::make_unique<PlayingState>(r_, seed_));
+        return;
+    }
+
     if (ev.pause) stack.push(std::make_unique<PausedState>(r_));
     if (ev.cycleBloom) r_.setBloomQuality(nextQuality(r_.bloomQuality()));
     if (ev.toggleGrid) showGrid_ = !showGrid_;
+    if (ev.toggleWeapons) sim_.setWeaponsFree(!sim_.weaponsFree());
+    if (ev.hailAccept) sim_.answerHail(true);
+    if (ev.hailDecline) sim_.answerHail(false);
     if (ev.toggleFollow) follow_ = !follow_;
-    if (ev.toggleAssist) ship_.setDragAssist(!ship_.dragAssist());
+    if (ev.toggleAssist) sim_.player().setDragAssist(!sim_.player().dragAssist());
     if (ev.zoomUnit >= 0.0f) camera_.setZoomAt(screen * 0.5f, Camera2D::unitToZoom(ev.zoomUnit));
 
     const glm::vec2 delta(input.deltaX, input.deltaY);
@@ -265,9 +319,11 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
     if (leftOnWorld_ && input.released[InputState::Left]) {
         if (leftTravel_ <= kDragThreshold) {
             selection_ = pick(camera_.current(), mouse_);
+            // The selected ship becomes the weapons target.
+            sim_.setTarget(selection_.kind == Selection::Kind::Alien ? selection_.alienId : -1);
             const bool doubleClick = simTime_ - lastClickTime_ < kDoubleClickSeconds &&
                                      glm::length(mouse_ - lastClickPos_) < kDoubleClickDistance;
-            if (doubleClick && selectedObject()) flyToSelection();
+            if (doubleClick && hasSelection()) flyToSelection();
             lastClickTime_ = doubleClick ? -10.0 : simTime_;
             lastClickPos_ = mouse_;
         }
@@ -286,40 +342,73 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
     // Right button: fly to the clicked point; hold it to keep steering toward the cursor.
     if (input.pressed[InputState::Right] && !ev.consumedMouse) rightOnWorld_ = true;
     if (!input.down[InputState::Right]) rightOnWorld_ = false;
-    if (rightOnWorld_) ship_.setDestination(camera_.current().screenToWorld(mouse_));
+    if (rightOnWorld_ && sim_.playerAlive())
+        sim_.player().setDestination(camera_.current().screenToWorld(mouse_));
 
     // Wheel zoom: around the ship while following, otherwise toward the cursor.
     if (input.wheelY != 0.0f)
         camera_.zoomAt(follow_ ? screen * 0.5f : mouse_, std::pow(kZoomPerWheelTick, input.wheelY));
 }
 
+void PlayingState::processEvents() {
+    for (const SimEvent& e : sim_.takeEvents()) {
+        switch (e.type) {
+        case SimEventType::Explosion:
+            bursts_.push_back({e.pos, 0.0f, 0.8f, std::max(e.value, 30.0f)});
+            break;
+        case SimEventType::Hit:
+            bursts_.push_back({e.pos, 0.0f, 0.25f, 14.0f});
+            break;
+        case SimEventType::Message:
+            message_ = e.text;
+            messageAge_ = 0.0f;
+            break;
+        default: break;
+        }
+    }
+    if (bursts_.size() > 200) bursts_.erase(bursts_.begin(), bursts_.begin() + 100);
+}
+
 void PlayingState::update(double dt, StateStack&) {
     prevSimTime_ = simTime_;
     simTime_ += dt;
-
-    ship_.update(dt);
-    if (ship_.thrusting()) {
-        const glm::vec2 back = -ship_.forward();
-        for (int i = 0; i < 2; ++i)
-            exhaust_.emit(ship_.position() + back * (kShipScale * 0.5f), back, ship_.velocity(),
-                          rng_);
-    }
-    exhaust_.update(static_cast<float>(dt));
-    rebaseOrigin();
-
-    if (follow_) camera_.setFollowTarget(ship_.position());
-    camera_.update(dt);
+    const float fdt = static_cast<float>(dt);
 
     SectorCoord lo, hi;
     visibleRange(camera_.current(), lo, hi);
-    streamer_.update(origin_, lo, hi, kStreamBudget);
+    sim_.setStreamBox(lo, hi);
+    sim_.update(dt);
+
+    const glm::vec2 shift = sim_.takeOriginShift();
+    if (shift != glm::vec2(0.0f)) {
+        camera_.shiftOrigin(shift);
+        exhaust_.shiftOrigin(shift);
+        for (Burst& b : bursts_) b.pos += shift;
+    }
+
+    const Ship& ship = sim_.player();
+    if (ship.thrusting() && sim_.playerAlive()) {
+        const glm::vec2 back = -ship.forward();
+        for (int i = 0; i < 2; ++i)
+            exhaust_.emit(ship.position() + back * (kShipScale * 0.5f), back, ship.velocity(), rng_);
+    }
+    exhaust_.update(fdt);
+
+    processEvents();
+    messageAge_ += fdt;
+    for (Burst& b : bursts_) b.age += fdt;
+    bursts_.erase(std::remove_if(bursts_.begin(), bursts_.end(), [](const Burst& b) { return b.age >= b.life; }),
+                  bursts_.end());
+
+    if (follow_) camera_.setFollowTarget(ship.position());
+    camera_.update(dt);
 }
 
 // ---- Rendering ----------------------------------------------------------
 void PlayingState::drawStars(const CameraView& v) {
     LineBatch& lines = r_.lines();
     lines.setView(r_.screenView());
-    const glm::dvec2 cam = absolutePosition(v.center);
+    const glm::dvec2 cam = sim_.absolutePosition(v.center);
     const glm::dvec2 vp(v.viewport);
     for (const Star& s : stars_) {
         // Stars drift slower than the world to suggest depth, and wrap around the screen.
@@ -341,7 +430,7 @@ void PlayingState::drawGrid(const CameraView& v) {
 
     // Grid lines sit at multiples of `spacing` in absolute coordinates, so they do not
     // jump when the origin moves to a new sector.
-    const glm::dvec2 off = absolutePosition({0.0f, 0.0f});
+    const glm::dvec2 off = sim_.absolutePosition({0.0f, 0.0f});
     const double sp = spacing;
     LineBatch& lines = r_.lines();
     for (double k = std::floor((tl.x + off.x) / sp); k * sp - off.x <= br.x; k += 1.0) {
@@ -380,19 +469,19 @@ void PlayingState::drawSectorLabels(const CameraView& v) {
     for (int sy = lo.y; sy <= hi.y; ++sy)
         for (int sx = lo.x; sx <= hi.x; ++sx) {
             const glm::vec2 corner =
-                v.worldToScreen(sectorOffset({sx, sy}, origin_) + glm::vec2(-kSectorHalf, -kSectorHalf));
+                v.worldToScreen(sectorOffset({sx, sy}, sim_.origin()) + glm::vec2(-kSectorHalf, -kSectorHalf));
             std::snprintf(buf, sizeof buf, "%d,%d", sx, sy);
-            const bool home = SectorCoord{sx, sy} == galaxy_.home;
+            const bool home = SectorCoord{sx, sy} == sim_.galaxy().home;
             r_.drawText(home ? std::string("HOME ") + buf : std::string(buf), corner + glm::vec2(8.0f, 8.0f),
                         10.0f, colors::scaled(home ? colors::phosphor : colors::amber, 0.7f), 1.0f);
         }
 }
 
 void PlayingState::drawDestination(const CameraView& v, double t) {
-    if (!ship_.hasDestination()) return;
+    if (!sim_.player().hasDestination() || !sim_.playerAlive()) return;
     LineBatch& lines = r_.lines();
-    const glm::vec2 from = ship_.position();
-    const glm::vec2 to = ship_.destination();
+    const glm::vec2 from = sim_.player().position();
+    const glm::vec2 to = sim_.player().destination();
     const glm::vec2 d = to - from;
     const float len = glm::length(d);
 
@@ -470,6 +559,30 @@ void PlayingState::drawObject(const CameraView& v, const SectorObject& o, glm::v
         lines.shape(circleShape_, Transform2D{.position = pos, .scale = o.radius * 0.25f}, colors::white, 1.5f);
         break;
     }
+    case ObjectKind::Mine: {
+        if (!v.isVisible(pos, o.radius * 2.0f)) return;
+        const bool blink = std::fmod(ft * 1.5f + static_cast<float>(o.variant) * 0.37f, 1.0f) < 0.25f;
+        if (screenR < kDotRadiusPixels) {
+            lines.line(pos, pos, blink ? colors::white : colors::red, 3.0f);
+            return;
+        }
+        lines.shape(mineShape_, Transform2D{.position = pos, .rotation = ft * 0.4f, .scale = o.radius},
+                    blink ? colors::white : colors::red, 1.5f);
+        break;
+    }
+    case ObjectKind::BlackHole: {
+        const float pull = o.radius * 8.0f;
+        if (!v.isVisible(pos, pull)) return;
+        lines.shape(orbitShape_, Transform2D{.position = pos, .scale = pull},
+                    colors::scaled(colors::white, 0.12f), 1.0f);
+        if (screenR < kDotRadiusPixels) {
+            lines.line(pos, pos, colors::white, 5.0f);
+            return;
+        }
+        lines.shape(holeShape_, Transform2D{.position = pos, .rotation = ft * 0.8f, .scale = o.radius},
+                    colors::white, 1.8f);
+        break;
+    }
     case ObjectKind::Nebula:
         if (!v.isVisible(pos, o.radius) || screenR < 3.0f) return;
         for (int k = 0; k < 4; ++k)
@@ -482,7 +595,7 @@ void PlayingState::drawObject(const CameraView& v, const SectorObject& o, glm::v
 }
 
 void PlayingState::drawSector(const CameraView& v, const Sector& sector, double t) {
-    const glm::vec2 offset = sectorOffset(sector.coord, origin_);
+    const glm::vec2 offset = sectorOffset(sector.coord, sim_.origin());
     if (!v.isVisible(offset, kSectorHalf * 1.42f)) return;
 
     if (sector.starIndex >= 0 && v.zoom < kOrbitMaxZoom) {
@@ -495,7 +608,57 @@ void PlayingState::drawSector(const CameraView& v, const Sector& sector, double 
                              colors::scaled(colors::cyan, 0.10f), 1.0f);
         }
     }
-    for (const SectorObject& o : sector.objects) drawObject(v, o, offset, t);
+    for (std::size_t i = 0; i < sector.objects.size(); ++i)
+        if (!sim_.isDestroyed(sector.coord, i)) drawObject(v, sector.objects[i], offset, t);
+}
+
+void PlayingState::drawShieldFlash(const CameraView& v, glm::vec2 pos, float radius, const Vitals& vit) {
+    constexpr float kFlashSeconds = 0.35f;
+    if (vit.sinceHit >= kFlashSeconds || vit.maxShield <= 0.0f || !v.isVisible(pos, radius * 2.0f)) return;
+    const float k = 1.0f - vit.sinceHit / kFlashSeconds;
+    r_.lines().shape(circleShape_, Transform2D{.position = pos, .scale = radius * 1.5f},
+                     colors::scaled(vit.shield > 0.0f ? colors::cyan : colors::red, k), 1.8f);
+}
+
+void PlayingState::drawAliens(const CameraView& v, double alpha, double t) {
+    const float af = static_cast<float>(alpha);
+    for (const AlienShip& a : sim_.aliens()) {
+        const Ship& b = a.body;
+        const glm::vec2 pos = b.previousPosition() + (b.position() - b.previousPosition()) * af;
+        const float heading = b.previousHeading() + wrapAngle(b.heading() - b.previousHeading()) * af;
+        const float radius = a.type->radius;
+
+        glm::vec4 color = tintColor(a.type->tint);
+        if (a.hostile()) color = colors::red;
+        if (a.state == AiState::Hail && std::fmod(t, 0.8) < 0.4) color = colors::amber;
+        const float scale = std::max(radius * 1.2f, kShipIconPixels * 0.8f / v.zoom);
+        drawShapeLod(r_.lines(), v, alienShapes_[static_cast<std::size_t>(a.type->shape % kAlienShapes)],
+                     Transform2D{.position = pos, .rotation = heading, .scale = scale}, scale, color, 2.2f);
+        drawShieldFlash(v, pos, radius, a.vitals);
+    }
+}
+
+void PlayingState::drawProjectilesAndBursts(const CameraView& v, double alpha) {
+    LineBatch& lines = r_.lines();
+    const float dt = static_cast<float>(alpha * kStep);
+    for (const Projectile& p : sim_.projectiles()) {
+        const glm::vec2 pos = p.pos + p.vel * dt;
+        if (!v.isVisible(pos, 40.0f)) continue;
+        const glm::vec4 c = p.owner == 0 ? colors::phosphor : colors::red;
+        lines.line(pos, pos - p.vel * 0.025f, c, 2.5f / std::max(v.zoom, 0.5f));
+    }
+    for (const Burst& b : bursts_) {
+        if (!v.isVisible(b.pos, b.size * 1.5f)) continue;
+        const float k = b.age / b.life;
+        const float r = b.size * (0.25f + 0.75f * k);
+        const glm::vec4 c = colors::scaled(colors::amber, 1.0f - k);
+        lines.shape(circleShape_, Transform2D{.position = b.pos, .scale = r}, c, 1.8f);
+        for (int i = 0; i < 8; ++i) {
+            const float a = 2.0f * kPi * static_cast<float>(i) / 8.0f + b.size;
+            const glm::vec2 d(std::cos(a), std::sin(a));
+            lines.line(b.pos + d * r * 0.5f, b.pos + d * r * (0.8f + 0.5f * k), c, 1.5f);
+        }
+    }
 }
 
 void PlayingState::render(double alpha) {
@@ -515,16 +678,19 @@ void PlayingState::render(double alpha) {
     visibleRange(v, lo, hi);
     for (int sy = lo.y; sy <= hi.y; ++sy)
         for (int sx = lo.x; sx <= hi.x; ++sx)
-            if (const Sector* s = streamer_.find({sx, sy})) drawSector(v, *s, t);
+            if (const Sector* s = sim_.streamer().find({sx, sy})) drawSector(v, *s, t);
+
+    drawAliens(v, alpha, t);
 
     // Selection ring (at least 12 screen points wide so small objects stay findable).
-    if (const SectorObject* sel = selectedObject()) {
-        const float ringRadius = std::max(sel->radius * 1.35f, 12.0f / v.zoom);
+    if (hasSelection()) {
+        const float ringRadius = std::max(selectionRadius() * 1.35f, 12.0f / v.zoom);
+        const bool target = selectedAlien() && sim_.target() == selection_.alienId;
         lines.shape(circleShape_,
                     Transform2D{.position = selectionPos(),
                                 .rotation = static_cast<float>(t) * 0.5f,
                                 .scale = ringRadius},
-                    colors::white, 1.3f);
+                    target ? colors::red : colors::white, 1.3f);
     }
 
     drawDestination(v, t);
@@ -540,16 +706,22 @@ void PlayingState::render(double alpha) {
     }
 
     // Ship (interpolated). When zoomed far out it is drawn as an enlarged icon.
-    const float af = static_cast<float>(alpha);
-    const glm::vec2 shipPos =
-        ship_.previousPosition() + (ship_.position() - ship_.previousPosition()) * af;
-    const float shipHeading =
-        ship_.previousHeading() + wrapAngle(ship_.heading() - ship_.previousHeading()) * af;
-    lines.shape(shipShape_,
-                Transform2D{.position = shipPos,
-                            .rotation = shipHeading,
-                            .scale = std::max(kShipScale, kShipIconPixels / v.zoom)},
-                colors::phosphor, 2.5f);
+    if (sim_.playerAlive()) {
+        const Ship& ship = sim_.player();
+        const float af = static_cast<float>(alpha);
+        const glm::vec2 shipPos =
+            ship.previousPosition() + (ship.position() - ship.previousPosition()) * af;
+        const float shipHeading =
+            ship.previousHeading() + wrapAngle(ship.heading() - ship.previousHeading()) * af;
+        lines.shape(shipShape_,
+                    Transform2D{.position = shipPos,
+                                .rotation = shipHeading,
+                                .scale = std::max(kShipScale, kShipIconPixels / v.zoom)},
+                    colors::phosphor, 2.5f);
+        drawShieldFlash(v, shipPos, kShipScale * 0.6f, sim_.vitals());
+    }
+
+    drawProjectilesAndBursts(v, alpha);
 
     if (showGrid_) drawSectorLabels(v);
     hud_.render(r_, hudState());
