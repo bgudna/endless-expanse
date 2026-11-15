@@ -506,14 +506,10 @@ void PlayingState::drawDestination(const CameraView& v, double t) {
     const glm::vec2 d = to - from;
     const float len = glm::length(d);
 
-    // Dashed path preview with screen-constant dash length.
+    // Solid path preview with 40% opacity.
     if (len > 1.0f) {
-        const glm::vec2 dir = d / len;
-        float dash = 12.0f / v.zoom;
-        if (len / (2.0f * dash) > 300.0f) dash = len / 600.0f; // cap the dash count
-        const glm::vec4 color = colors::scaled(colors::cyan, 0.6f);
-        for (float s = 0.0f; s < len; s += 2.0f * dash)
-            lines.line(from + dir * s, from + dir * std::min(s + dash, len), color, 1.5f);
+        const glm::vec4 color = colors::scaled(colors::cyan, 0.4f);
+        lines.line(from, to, color, 1.5f);
     }
 
     // Destination marker: a slowly turning diamond with a centre ring.
