@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,7 +52,8 @@ private:
 
 // Playing: an endless procedurally generated galaxy with hazards, aliens and combat.
 //   wheel: zoom   left-drag / middle-drag: pan   right-click (or hold): fly there
-//   left-click: select / target   double-click: fly to the selected object
+//   left-click: select / target   double-click or ORBIT: orbit the selected object
+// Orbits follow moving ships; the orbit is tied to its target, not to the current selection.
 // All game rules live in the headless Simulation; this class is input, camera and drawing.
 class PlayingState : public GameState {
 public:
@@ -81,6 +83,13 @@ private:
         float life;
         float size;
     };
+    // Where a selection is right now, or nullopt when it has been destroyed or unloaded.
+    struct Located {
+        glm::vec2 pos;
+        float radius;
+        bool nebula;
+        glm::vec2 velocity;
+    };
 
     HudState hudState() const;
     void drawGrid(const CameraView& v);
@@ -98,13 +107,13 @@ private:
     void processEvents();
 
     Selection pick(const CameraView& v, glm::vec2 screenPoint) const;
-    const SectorObject* selectedObject() const;
-    const AlienShip* selectedAlien() const;
-    bool hasSelection() const { return selectedObject() || selectedAlien(); }
-    glm::vec2 selectionPos() const;
-    float selectionRadius() const;
-    std::string selectionName() const;
-    void flyToSelection();
+    const SectorObject* objectAt(const Selection& sel) const;
+    const AlienShip* alienAt(const Selection& sel) const;
+    std::optional<Located> locate(const Selection& sel) const;
+    bool hasSelection() const { return locate(selection_).has_value(); }
+    std::string selectionName(const Selection& sel) const;
+    void startOrbit();
+    void updateOrbit();
 
     Renderer& r_;
     std::uint64_t seed_;
@@ -124,6 +133,8 @@ private:
     bool follow_ = true;
     bool showGrid_ = true;
     Selection selection_;
+    Selection orbitSel_;
+    bool orbiting_ = false;
     double lastClickTime_ = -10.0;
     glm::vec2 lastClickPos_{0.0f};
     glm::vec2 mouse_{0.0f};

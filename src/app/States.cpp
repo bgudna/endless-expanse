@@ -27,6 +27,7 @@ constexpr float kMinDrawPixels = 0.6f;   // rocks/debris smaller than this are n
 constexpr float kDragThreshold = 4.0f;
 constexpr float kZoomPerWheelTick = 1.15f;
 constexpr float kShipScale = 28.0f;
+constexpr float kOrbitRadius = 120.0f; // how far the ship circles a right-clicked point
 constexpr float kShipIconPixels = 9.0f; // minimum on-screen size of the ship
 constexpr float kPickPixels = 10.0f;    // click tolerance around objects
 constexpr double kDoubleClickSeconds = 0.35;
@@ -172,46 +173,60 @@ PlayingState::Selection PlayingState::pick(const CameraView& v, glm::vec2 screen
     return best;
 }
 
-const SectorObject* PlayingState::selectedObject() const {
-    if (selection_.kind != Selection::Kind::Object) return nullptr;
-    const Sector* s = sim_.streamer().find(selection_.sector);
-    if (!s || selection_.index >= s->objects.size() ||
-        sim_.isDestroyed(selection_.sector, selection_.index))
-        return nullptr;
-    return &s->objects[selection_.index];
+const SectorObject* PlayingState::objectAt(const Selection& sel) const {
+    if (sel.kind != Selection::Kind::Object) return nullptr;
+    const Sector* s = sim_.streamer().find(sel.sector);
+    if (!s || sel.index >= s->objects.size() || sim_.isDestroyed(sel.sector, sel.index)) return nullptr;
+    return &s->objects[sel.index];
 }
 
-const AlienShip* PlayingState::selectedAlien() const {
-    return selection_.kind == Selection::Kind::Alien ? sim_.findAlien(selection_.alienId) : nullptr;
+const AlienShip* PlayingState::alienAt(const Selection& sel) const {
+    return sel.kind == Selection::Kind::Alien ? sim_.findAlien(sel.alienId) : nullptr;
 }
 
-glm::vec2 PlayingState::selectionPos() const {
-    if (const AlienShip* a = selectedAlien()) return a->body.position();
-    return selectedObject()->pos + sectorOffset(selection_.sector, sim_.origin());
+std::optional<PlayingState::Located> PlayingState::locate(const Selection& sel) const {
+    if (const AlienShip* a = alienAt(sel))
+        return Located{a->body.position(), a->type->radius, false, a->body.velocity()};
+    if (const SectorObject* o = objectAt(sel))
+        return Located{o->pos + sectorOffset(sel.sector, sim_.origin()), o->radius,
+                       o->kind == ObjectKind::Nebula, glm::vec2(0.0f)};
+    return std::nullopt;
 }
 
-float PlayingState::selectionRadius() const {
-    if (const AlienShip* a = selectedAlien()) return a->type->radius;
-    return selectedObject()->radius;
+std::string PlayingState::selectionName(const Selection& sel) const {
+    if (const AlienShip* a = alienAt(sel)) return a->type->name;
+    if (const SectorObject* o = objectAt(sel))
+        return std::string(objectKindName(o->kind)) + " " + std::to_string(sel.sector.x) + "," +
+               std::to_string(sel.sector.y) + "-" + std::to_string(sel.index + 1);
+    return "UNKNOWN";
 }
 
-std::string PlayingState::selectionName() const {
-    if (const AlienShip* a = selectedAlien()) return a->type->name;
-    return std::string(objectKindName(selectedObject()->kind)) + " " +
-           std::to_string(selection_.sector.x) + "," + std::to_string(selection_.sector.y) + "-" +
-           std::to_string(selection_.index + 1);
+// Orbit tracking: the orbit follows its target each step, so a moving ship is kept in orbit.
+// Selecting something else does not change the orbit.
+void PlayingState::startOrbit() {
+    if (!hasSelection() || !sim_.playerAlive()) return;
+    orbitSel_ = selection_;
+    orbiting_ = true;
+    updateOrbit();
 }
 
-void PlayingState::flyToSelection() {
-    if (!hasSelection()) return;
-    const Ship& ship = sim_.player();
-    glm::vec2 away = ship.position() - selectionPos();
-    const float len = glm::length(away);
-    away = len > 1e-3f ? away / len : glm::vec2(1.0f, 0.0f);
-    const SectorObject* o = selectedObject();
-    const float standoff =
-        (o && o->kind == ObjectKind::Nebula) ? 0.0f : selectionRadius() + kStandoffDistance;
-    sim_.player().setDestination(selectionPos() + away * standoff);
+void PlayingState::updateOrbit() {
+    if (!orbiting_) return;
+    if (!sim_.playerAlive()) {
+        orbiting_ = false;
+        return;
+    }
+    const std::optional<Located> t = locate(orbitSel_);
+    if (!t) {
+        orbiting_ = false;
+        sim_.player().clearDestination();
+        message_ = "ORBIT ENDED";
+        messageAge_ = 0.0f;
+        return;
+    }
+    // Circle at a standoff from the surface; nebulae are circled at their edge.
+    const float radius = t->nebula ? t->radius : t->radius + kStandoffDistance;
+    sim_.player().setOrbitDestination(t->pos, radius, t->velocity);
 }
 
 HudState PlayingState::hudState() const {
@@ -227,6 +242,8 @@ HudState PlayingState::hudState() const {
     s.showGrid = showGrid_;
     s.dragAssist = ship.dragAssist();
     s.weaponsFree = sim_.weaponsFree();
+    s.canOrbit = hasSelection();
+    s.orbiting = orbiting_;
     s.hull = sim_.vitals().hullFraction();
     s.shield = sim_.vitals().shieldFraction();
     s.shipDestroyed = !sim_.playerAlive();
@@ -260,13 +277,14 @@ HudState PlayingState::hudState() const {
         std::snprintf(buf, sizeof buf, "\nDESTINATION %.0f", static_cast<double>(ship.distanceToDestination()));
         s.info += buf;
     }
-    if (hasSelection()) {
-        const float dist = glm::length(selectionPos() - ship.position());
+    if (orbiting_) s.info += "\nORBITING " + selectionName(orbitSel_);
+    if (const auto target = locate(selection_)) {
+        const float dist = glm::length(target->pos - ship.position());
         std::snprintf(buf, sizeof buf, "\n\nSELECTED %s\nDISTANCE %.0f  RADIUS %.0f",
-                      selectionName().c_str(), static_cast<double>(dist),
-                      static_cast<double>(selectionRadius()));
+                      selectionName(selection_).c_str(), static_cast<double>(dist),
+                      static_cast<double>(target->radius));
         s.info += buf;
-        if (const AlienShip* a = selectedAlien()) {
+        if (const AlienShip* a = alienAt(selection_)) {
             std::snprintf(buf, sizeof buf, "\n%s  %s\nHULL %.0f%%  SHIELD %.0f%%",
                           roleName(a->type->role), aiStateName(a->state),
                           static_cast<double>(a->vitals.hullFraction() * 100.0f),
@@ -300,6 +318,7 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
     if (ev.hailDecline) sim_.answerHail(false);
     if (ev.toggleFollow) follow_ = !follow_;
     if (ev.toggleAssist) sim_.player().setDragAssist(!sim_.player().dragAssist());
+    if (ev.orbitSelected) startOrbit();
     if (ev.zoomUnit >= 0.0f) camera_.setZoomAt(screen * 0.5f, Camera2D::unitToZoom(ev.zoomUnit));
 
     const glm::vec2 delta(input.deltaX, input.deltaY);
@@ -323,7 +342,7 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
             sim_.setTarget(selection_.kind == Selection::Kind::Alien ? selection_.alienId : -1);
             const bool doubleClick = simTime_ - lastClickTime_ < kDoubleClickSeconds &&
                                      glm::length(mouse_ - lastClickPos_) < kDoubleClickDistance;
-            if (doubleClick && hasSelection()) flyToSelection();
+            if (doubleClick && hasSelection()) startOrbit();
             lastClickTime_ = doubleClick ? -10.0 : simTime_;
             lastClickPos_ = mouse_;
         }
@@ -339,11 +358,13 @@ void PlayingState::handleInput(const InputState& input, StateStack& stack) {
         follow_ = false;
     }
 
-    // Right button: fly to the clicked point; hold it to keep steering toward the cursor.
+    // Right button: fly to the clicked point and circle it; hold it to keep steering toward the cursor.
     if (input.pressed[InputState::Right] && !ev.consumedMouse) rightOnWorld_ = true;
     if (!input.down[InputState::Right]) rightOnWorld_ = false;
-    if (rightOnWorld_ && sim_.playerAlive())
-        sim_.player().setDestination(camera_.current().screenToWorld(mouse_));
+    if (rightOnWorld_ && sim_.playerAlive()) {
+        orbiting_ = false;
+        sim_.player().setOrbitDestination(camera_.current().screenToWorld(mouse_), kOrbitRadius);
+    }
 
     // Wheel zoom: around the ship while following, otherwise toward the cursor.
     if (input.wheelY != 0.0f)
@@ -377,6 +398,7 @@ void PlayingState::update(double dt, StateStack&) {
     SectorCoord lo, hi;
     visibleRange(camera_.current(), lo, hi);
     sim_.setStreamBox(lo, hi);
+    updateOrbit();
     sim_.update(dt);
 
     const glm::vec2 shift = sim_.takeOriginShift();
@@ -387,10 +409,9 @@ void PlayingState::update(double dt, StateStack&) {
     }
 
     const Ship& ship = sim_.player();
-    if (ship.thrusting() && sim_.playerAlive()) {
+    if (ship.thrusting() && sim_.playerAlive() && !ship.orbiting()) {
         const glm::vec2 back = -ship.forward();
-        for (int i = 0; i < 2; ++i)
-            exhaust_.emit(ship.position() + back * (kShipScale * 0.5f), back, ship.velocity(), rng_);
+        exhaust_.emit(ship.position() + back * (kShipScale * 0.5f));
     }
     exhaust_.update(fdt);
 
@@ -683,25 +704,27 @@ void PlayingState::render(double alpha) {
     drawAliens(v, alpha, t);
 
     // Selection ring (at least 12 screen points wide so small objects stay findable).
-    if (hasSelection()) {
-        const float ringRadius = std::max(selectionRadius() * 1.35f, 12.0f / v.zoom);
-        const bool target = selectedAlien() && sim_.target() == selection_.alienId;
+    if (const auto sel = locate(selection_)) {
+        const float ringRadius = std::max(sel->radius * 1.35f, 12.0f / v.zoom);
+        const bool targeted = alienAt(selection_) && sim_.target() == selection_.alienId;
         lines.shape(circleShape_,
-                    Transform2D{.position = selectionPos(),
+                    Transform2D{.position = sel->pos,
                                 .rotation = static_cast<float>(t) * 0.5f,
                                 .scale = ringRadius},
-                    target ? colors::red : colors::white, 1.3f);
+                    targeted ? colors::red : colors::white, 1.3f);
     }
 
     drawDestination(v, t);
 
-    // Engine exhaust: short fading streaks, advanced by the render interpolation.
+    // Engine exhaust: one tail, brightest at the ship and fading toward its far end.
     if (v.zoom > 0.15f) {
-        for (const ExhaustParticle& p : exhaust_.particles()) {
-            const glm::vec2 pos = p.pos + p.vel * static_cast<float>(alpha * kStep);
-            if (!v.isVisible(pos, 10.0f)) continue;
-            const float fade = 1.0f - p.age / p.life;
-            lines.line(pos, pos - p.vel * 0.04f, colors::scaled(colors::amber, fade), 1.5f);
+        const auto& pts = exhaust_.points();
+        for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+            const glm::vec2& a = pts[i].pos;
+            const glm::vec2& b = pts[i + 1].pos;
+            if (!v.isVisible(a, 10.0f) && !v.isVisible(b, 10.0f)) continue;
+            const float fade = 1.0f - pts[i].age / ExhaustTrail::kLife;
+            lines.line(a, b, colors::scaled(colors::amber, fade), 2.0f);
         }
     }
 

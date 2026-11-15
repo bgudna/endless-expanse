@@ -1,39 +1,39 @@
 #pragma once
 
-#include "core/Random.h"
-
 #include <glm/glm.hpp>
 
 #include <cstddef>
-#include <vector>
+#include <deque>
 
 namespace ee {
 
-struct ExhaustParticle {
+struct TrailPoint {
     glm::vec2 pos;
-    glm::vec2 vel;
     float age = 0.0f;
-    float life = 0.5f;
 };
 
-// Cosmetic engine exhaust. Simulated at the fixed step; the renderer draws each
-// particle as a short fading streak.
+// Cosmetic engine exhaust: one continuous tail of points sampled behind the ship
+// while it thrusts. Points age and drop off the far end, so the tail fades out.
+// Simulated at the fixed step; the renderer draws a segment between neighbours.
 class ExhaustTrail {
 public:
-    static constexpr std::size_t kMaxParticles = 512;
+    static constexpr std::size_t kMaxPoints = 200;
+    static constexpr float kSpacing = 5.0f;  // world units between samples
+    static constexpr float kLife = 2.0f;     // seconds before a point disappears
 
-    // `exhaustDir` is the unit direction the exhaust travels (away from the ship).
-    void emit(glm::vec2 pos, glm::vec2 exhaustDir, glm::vec2 shipVelocity, Random& rng);
+    // Records `pos` (the exhaust origin) if it is at least kSpacing from the newest point.
+    void emit(glm::vec2 pos);
     void update(float dt);
-    void clear() { particles_.clear(); }
+    void clear() { points_.clear(); }
     void shiftOrigin(glm::vec2 delta) {
-        for (ExhaustParticle& p : particles_) p.pos += delta;
+        for (TrailPoint& p : points_) p.pos += delta;
     }
 
-    const std::vector<ExhaustParticle>& particles() const { return particles_; }
+    // Ordered newest (nearest the ship) to oldest (far end).
+    const std::deque<TrailPoint>& points() const { return points_; }
 
 private:
-    std::vector<ExhaustParticle> particles_;
+    std::deque<TrailPoint> points_;
 };
 
 } // namespace ee
