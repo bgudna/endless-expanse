@@ -19,14 +19,16 @@ The first configure fetches doctest and glm from GitHub. Other platforms need an
 | Action | Result |
 |---|---|
 | Left-click on the main menu | Start the demo scene |
-| Right-click on the map | Fly the ship there (autopilot: turn, thrust, coast, flip, brake) |
+| Right-click on the map | Fly to the point and circle it at 120 units (autopilot: turn, thrust, coast, flip, brake, then orbit) |
 | Hold the right button | Keep steering toward the cursor |
 | Left-click an object | Select it (info shown at left) |
-| Double-click an object | Fly to it, stopping 50 units off its surface |
+| Double-click an object | Start an orbit of it (same as the ORBIT button) |
+| Left-click an object, then ORBIT | Circle it, 50 units off its surface. The orbit follows moving ships. Selecting something else does not end it |
+| Right-click or hold the right button | Ends an orbit and flies to the clicked point |
 | Mouse wheel | Zoom (around the ship while FOLLOW is on, otherwise toward the cursor) |
 | Left-drag or middle-drag | Pan the camera (turns FOLLOW off) |
 | Zoom slider (right edge) | Drag to zoom |
-| HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, GRID on/off (sector borders, labels, grid) |
+| HUD buttons (bottom-left) | FOLLOW on/off, drag ASSIST on/off, PAUSE, cycle BLOOM, GRID on/off (sector borders, labels, grid), FIRE mode, ORBIT (enabled while something is selected) |
 | Middle-click (no drag) | Toggle the on-screen FPS / frame-time / segment-count readout |
 | Left-click an alien | Select and target it (turret auto-fires per the Weapons toggle) |
 | Weapons button | FIRE: FREE / FIRE: HOSTILE ONLY |

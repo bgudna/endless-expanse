@@ -134,6 +134,83 @@ TEST_CASE("drag assist bleeds off speed when idle; without it the ship drifts") 
     CHECK(drifting.position().x == doctest::Approx(3000.0f).epsilon(1e-3));
 }
 
+TEST_CASE("orbit: circles the destination at its radius without turning back") {
+    for (float heading : {0.0f, kPi / 2, kPi, -kPi / 2}) {
+        for (float distance : {200.0f, 1500.0f}) {
+            INFO("distance " << distance << ", heading " << heading);
+            Ship s;
+            s.teleport({0.0f, 0.0f}, heading);
+            const glm::vec2 centre(distance, 0.0f);
+            const float radius = 120.0f;
+            s.setOrbitDestination(centre, radius);
+
+            for (int i = 0; i < 60 * 20; ++i) s.update(kDt); // settle onto the circle
+            REQUIRE(s.hasDestination());
+            REQUIRE(s.orbiting());
+
+            int spinChanges = 0;
+            float prevSpin = 0.0f;
+            float minDist = 1e9f, maxDist = 0.0f;
+            for (int i = 0; i < 60 * 30; ++i) {
+                s.update(kDt);
+                const glm::vec2 rel = s.position() - centre;
+                const float d = glm::length(rel);
+                minDist = std::min(minDist, d);
+                maxDist = std::max(maxDist, d);
+                const float spin = rel.x * s.velocity().y - rel.y * s.velocity().x;
+                if (i > 0 && spin * prevSpin < 0.0f) ++spinChanges;
+                prevSpin = spin;
+            }
+            CHECK(spinChanges == 0);
+            CHECK(minDist > radius * 0.8f);
+            CHECK(maxDist < radius * 1.2f);
+            CHECK(s.speed() == doctest::Approx(s.params().orbitSpeed).epsilon(0.15));
+        }
+    }
+}
+
+TEST_CASE("orbit: clearing the destination ends the orbit") {
+    Ship s;
+    s.teleport({0.0f, 0.0f}, 0.0f);
+    s.setOrbitDestination({500.0f, 0.0f}, 120.0f);
+    for (int i = 0; i < 60 * 10; ++i) s.update(kDt);
+    s.clearDestination();
+    CHECK_FALSE(s.orbiting());
+    for (int i = 0; i < 60 * 15; ++i) s.update(kDt);
+    CHECK(s.speed() == doctest::Approx(0.0f));
+}
+
+TEST_CASE("orbit: follows a moving centre and keeps its radius band") {
+    Ship s;
+    s.teleport({0.0f, 0.0f}, 0.0f);
+    const glm::vec2 centreVel(200.0f, 0.0f);
+    glm::vec2 centre(800.0f, 300.0f);
+    const float radius = 120.0f;
+    auto step = [&] {
+        centre += centreVel * static_cast<float>(kDt);
+        s.setOrbitDestination(centre, radius, centreVel);
+        s.update(kDt);
+    };
+    for (int i = 0; i < 60 * 25; ++i) step(); // catch up and settle
+    REQUIRE(s.orbiting());
+
+    float minDist = 1e9f, maxDist = 0.0f, minSpeed = 1e9f, maxSpeed = 0.0f;
+    for (int i = 0; i < 60 * 30; ++i) {
+        step();
+        const float d = glm::length(s.position() - centre);
+        minDist = std::min(minDist, d);
+        maxDist = std::max(maxDist, d);
+        const float rel = glm::length(s.velocity() - centreVel);
+        minSpeed = std::min(minSpeed, rel);
+        maxSpeed = std::max(maxSpeed, rel);
+    }
+    // Wider band than the static orbit: the ship chases a 200 u/s centre and its turn
+    // limit makes the radius wobble by up to ~20 u.
+    CHECK(minDist >= radius * 0.75f);
+    CHECK(maxDist <= radius * 1.25f);
+    CHECK(minSpeed >= 120.0f * 0.85f);
+}
+
 TEST_CASE("autopilot can retarget in mid-flight and still arrives") {
     Ship s;
     s.teleport({0.0f, 0.0f}, 0.0f);
@@ -157,20 +234,24 @@ TEST_CASE("clearing the destination lets drag assist take over") {
     CHECK(s.speed() == doctest::Approx(0.0f));
 }
 
-TEST_CASE("exhaust particles expire and are capped") {
-    Random rng(1);
+TEST_CASE("exhaust tail is capped, spaced and fades out") {
     ExhaustTrail trail;
-    for (int i = 0; i < 2000; ++i) trail.emit({0.0f, 0.0f}, {-1.0f, 0.0f}, {0.0f, 0.0f}, rng);
-    CHECK(trail.particles().size() == ExhaustTrail::kMaxParticles);
-    for (int i = 0; i < 120; ++i) trail.update(1.0f / 60.0f);
-    CHECK(trail.particles().empty());
+    for (int i = 0; i < 1000; ++i) trail.emit({static_cast<float>(i) * 10.0f, 0.0f});
+    CHECK(trail.points().size() == ExhaustTrail::kMaxPoints);
+    trail.emit(trail.points().front().pos); // too close to the newest point: ignored
+    CHECK(trail.points().size() == ExhaustTrail::kMaxPoints);
+    trail.update(ExhaustTrail::kLife * 0.5f);
+    CHECK(trail.points().size() == ExhaustTrail::kMaxPoints);
+    trail.update(ExhaustTrail::kLife);
+    CHECK(trail.points().empty());
 }
 
-TEST_CASE("exhaust streams away from the ship") {
-    Random rng(2);
+TEST_CASE("exhaust tail is ordered newest first") {
     ExhaustTrail trail;
-    trail.emit({0.0f, 0.0f}, {-1.0f, 0.0f}, {100.0f, 0.0f}, rng);
+    trail.emit({0.0f, 0.0f});
     trail.update(0.1f);
-    REQUIRE(trail.particles().size() == 1);
-    CHECK(trail.particles()[0].vel.x < 0.0f + 100.0f * 0.5f); // slower than the ship, trailing behind
+    trail.emit({100.0f, 0.0f});
+    REQUIRE(trail.points().size() == 2);
+    CHECK(trail.points()[0].pos.x == doctest::Approx(100.0f));
+    CHECK(trail.points()[1].age == doctest::Approx(0.1f));
 }

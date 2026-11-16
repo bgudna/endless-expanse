@@ -14,6 +14,10 @@ struct ShipParams {
     float brakeFraction = 0.55f; // autopilot plans to brake at this share of full thrust
     float deadzone = 4.0f;       // ignore velocity errors smaller than this (stops flip-flopping)
     float throttleGain = 3.0f;   // velocity error -> acceleration request
+    float orbitSpeed = 120.0f;   // tangential speed while circling an orbit destination
+    float orbitEntry = 40.0f;    // switch to orbit control this far outside the orbit radius
+    float orbitGain = 1.5f;      // 1/s correction of the radial error while orbiting
+    float minOrbitRadius = 60.0f; // keeps the turning circle (orbitSpeed / turnRate) well inside the orbit
 };
 
 // Newtonian-lite starship: it has inertia, turns at a limited rate and can only
@@ -31,9 +35,18 @@ public:
     void setDestination(glm::vec2 world) {
         dest_ = world;
         hasDest_ = true;
+        orbit_ = false;
+        orbitCenterVel_ = {0.0f, 0.0f};
     }
-    void clearDestination() { hasDest_ = false; }
+    // Fly to the circle of `radius` around `center` and keep circling it until the
+    // destination is changed or cleared. `centerVelocity` lets the orbit follow a moving body.
+    void setOrbitDestination(glm::vec2 center, float radius, glm::vec2 centerVelocity = {0.0f, 0.0f});
+    void clearDestination() {
+        hasDest_ = false;
+        orbit_ = false;
+    }
     bool hasDestination() const { return hasDest_; }
+    bool orbiting() const { return hasDest_ && orbit_; }
     glm::vec2 destination() const { return dest_; }
     float distanceToDestination() const { return hasDest_ ? glm::length(dest_ - pos_) : 0.0f; }
 
@@ -68,10 +81,16 @@ public:
     const ShipParams& params() const { return p_; }
 
 private:
+    glm::vec2 orbitVelocity(glm::vec2 toDest, float dist);
+
     ShipParams p_;
     glm::vec2 pos_{0.0f}, vel_{0.0f}, prevPos_{0.0f}, dest_{0.0f};
     float heading_ = 0.0f, prevHeading_ = 0.0f;
     bool hasDest_ = false;
+    bool orbit_ = false;
+    float orbitRadius_ = 0.0f;
+    glm::vec2 orbitCenterVel_{0.0f};
+    int orbitDir_ = 0; // +1 / -1 once an orbit is entered; 0 until then
     bool assist_ = true;
     bool thrusting_ = false;
 };

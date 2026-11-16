@@ -28,6 +28,8 @@ struct HudState {
     bool showGrid = true;
     bool dragAssist = true;
     bool weaponsFree = false;
+    bool canOrbit = false; // something is selected to orbit
+    bool orbiting = false;
     float hull = 1.0f;   // 0..1
     float shield = 1.0f; // 0..1
     std::string status;  // short warning under the bars (nebula, radiation, ...)
@@ -52,6 +54,7 @@ struct HudEvents {
     bool cycleBloom = false;
     bool toggleGrid = false;
     bool toggleWeapons = false;
+    bool orbitSelected = false;
     bool hailAccept = false;
     bool hailDecline = false;
     float zoomUnit = -1.0f; // >= 0 when the slider moved
@@ -61,7 +64,7 @@ struct HudEvents {
 // (A reusable UI toolkit arrives in M9.)
 class Hud {
 public:
-    enum Button { Follow, Assist, Pause, Bloom, Grid, Weapons, ButtonCount };
+    enum Button { Follow, Assist, Pause, Bloom, Grid, Weapons, Orbit, ButtonCount };
 
     void layout(glm::vec2 screenSize, const HudState& state);
     HudEvents handleInput(const InputState& input);
@@ -70,6 +73,7 @@ public:
 private:
     Rect buttons_[ButtonCount];
     std::string labels_[ButtonCount];
+    bool enabled_[ButtonCount] = {};
     Rect sliderHit_;
     Rect hailPanel_, hailAcceptBtn_, hailDeclineBtn_;
     bool hailShown_ = false;

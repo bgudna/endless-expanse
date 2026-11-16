@@ -36,10 +36,12 @@ void Hud::layout(glm::vec2 screenSize, const HudState& state) {
     labels_[Bloom] = std::string("BLOOM ") + toString(state.bloom);
     labels_[Grid] = state.showGrid ? "GRID ON" : "GRID OFF";
     labels_[Weapons] = state.weaponsFree ? "FIRE: FREE" : "FIRE: HOSTILE ONLY";
+    labels_[Orbit] = state.orbiting ? "ORBITING" : "ORBIT";
 
     float x = kMargin;
     const float y = screenSize.y - kMargin - kButtonHeight;
     for (int i = 0; i < ButtonCount; ++i) {
+        enabled_[i] = i != Orbit || state.canOrbit;
         const float w =
             StrokeFont::measure(labels_[i], kButtonTextHeight).x + 2.0f * kButtonPadding;
         buttons_[i] = {{x, y}, {w, kButtonHeight}};
@@ -68,8 +70,8 @@ HudEvents Hud::handleInput(const InputState& input) {
     bool overButton = false;
     for (int i = 0; i < ButtonCount; ++i) {
         if (!buttons_[i].contains(mouse_)) continue;
-        overButton = true;
-        if (!input.pressed[InputState::Left]) continue;
+        overButton = true; // disabled buttons still swallow the click
+        if (!enabled_[i] || !input.pressed[InputState::Left]) continue;
         switch (i) {
         case Follow: ev.toggleFollow = true; break;
         case Assist: ev.toggleAssist = true; break;
@@ -77,6 +79,7 @@ HudEvents Hud::handleInput(const InputState& input) {
         case Bloom: ev.cycleBloom = true; break;
         case Grid: ev.toggleGrid = true; break;
         case Weapons: ev.toggleWeapons = true; break;
+        case Orbit: ev.orbitSelected = true; break;
         default: break;
         }
     }
@@ -107,8 +110,10 @@ void Hud::render(Renderer& r, const HudState& state) const {
 
     // Buttons.
     for (int i = 0; i < ButtonCount; ++i) {
-        const bool hover = buttons_[i].contains(mouse_);
-        const glm::vec4 color = hover ? colors::amber : colors::scaled(colors::phosphor, 0.7f);
+        const bool hover = enabled_[i] && buttons_[i].contains(mouse_);
+        const glm::vec4 color = !enabled_[i] ? colors::scaled(colors::phosphor, 0.3f)
+                                : hover      ? colors::amber
+                                             : colors::scaled(colors::phosphor, 0.7f);
         drawRect(lines, buttons_[i], color, 1.5f);
         r.drawTextCentered(labels_[i], buttons_[i].pos + buttons_[i].size * 0.5f,
                            kButtonTextHeight, color, 1.3f);

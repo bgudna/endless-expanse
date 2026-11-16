@@ -7,11 +7,22 @@
 
 namespace ee {
 
+void Ship::setOrbitDestination(glm::vec2 center, float radius, glm::vec2 centerVelocity) {
+    // Keep the current circling direction while the caller re-issues the same orbit each frame.
+    if (!orbit_) orbitDir_ = 0;
+    dest_ = center;
+    orbitRadius_ = std::max(radius, p_.minOrbitRadius);
+    orbitCenterVel_ = centerVelocity;
+    hasDest_ = true;
+    orbit_ = true;
+}
+
 void Ship::teleport(glm::vec2 position, float heading) {
     pos_ = prevPos_ = position;
     heading_ = prevHeading_ = wrapAngle(heading);
     vel_ = glm::vec2(0.0f);
-    hasDest_ = false;
+    clearDestination();
+    orbitDir_ = 0;
 }
 
 void Ship::update(double dtSeconds) {
@@ -29,24 +40,30 @@ void Ship::update(double dtSeconds) {
         const float dist = glm::length(toDest);
         const float speed = glm::length(vel_);
 
-        if (dist <= p_.arriveRadius && speed <= p_.arriveSpeed) {
+        if (!orbit_ && dist <= p_.arriveRadius && speed <= p_.arriveSpeed) {
             pos_ = dest_;
             vel_ = glm::vec2(0.0f);
             hasDest_ = false;
         } else {
-            const glm::vec2 dir = dist > 1e-4f ? toDest / dist : glm::vec2(0.0f);
-
-            // Speed profile: sqrt(2*a*d) lets us stop exactly at the target while braking at
-            // `aBrake`; inside `crossover` it becomes linear so the final approach is smooth.
-            // The turn-around time is subtracted from the available distance.
-            const float aBrake = p_.thrust * p_.brakeFraction;
-            const float turnLag = speed * (0.75f * kPi / p_.turnRate);
-            const float effective = std::max(0.0f, dist - turnLag);
-            constexpr float kCrossover = 20.0f;
-            const float k = std::sqrt(2.0f * aBrake / kCrossover);
-            const float profile = effective < kCrossover ? k * effective
-                                                         : std::sqrt(2.0f * aBrake * effective);
-            const glm::vec2 desiredVel = dir * std::min(profile, p_.maxSpeed);
+            glm::vec2 desiredVel;
+            if (orbit_ && dist <= orbitRadius_ + p_.orbitEntry) {
+                desiredVel = orbitVelocity(toDest, dist);
+            } else {
+                // Speed profile: sqrt(2*a*d) lets us stop exactly at the stop point while braking at
+                // `aBrake`; inside `crossover` it becomes linear so the final approach is smooth.
+                // The turn-around time is subtracted from the available distance. An orbit's stop
+                // point is its circle, so the profile brings the ship to the circle at rest.
+                const glm::vec2 dir = dist > 1e-4f ? toDest / dist : glm::vec2(0.0f);
+                const float stopDist = orbit_ ? orbitRadius_ : 0.0f;
+                const float aBrake = p_.thrust * p_.brakeFraction;
+                const float turnLag = glm::length(vel_ - orbitCenterVel_) * (0.75f * kPi / p_.turnRate);
+                const float effective = std::max(0.0f, dist - stopDist - turnLag);
+                constexpr float kCrossover = 20.0f;
+                const float k = std::sqrt(2.0f * aBrake / kCrossover);
+                const float profile = effective < kCrossover ? k * effective
+                                                             : std::sqrt(2.0f * aBrake * effective);
+                desiredVel = dir * std::min(profile, p_.maxSpeed) + orbitCenterVel_;
+            }
 
             const glm::vec2 dv = desiredVel - vel_;
             const float dvLen = glm::length(dv);
@@ -78,6 +95,20 @@ void Ship::update(double dtSeconds) {
     const float speed = glm::length(vel_);
     if (speed > p_.maxSpeed) vel_ *= p_.maxSpeed / speed;
     pos_ += vel_ * dt;
+}
+
+glm::vec2 Ship::orbitVelocity(glm::vec2 toDest, float dist) {
+    const glm::vec2 outward = dist > 1e-3f ? -toDest / dist : glm::vec2(1.0f, 0.0f);
+    if (orbitDir_ == 0) {
+        const glm::vec2 relVel = vel_ - orbitCenterVel_;
+        const float side = outward.x * relVel.y - outward.y * relVel.x;
+        orbitDir_ = side < 0.0f ? -1 : 1;
+    }
+    const glm::vec2 tangent = static_cast<float>(orbitDir_) * glm::vec2(-outward.y, outward.x);
+    const float radialError = dist - orbitRadius_;
+    const float radialSpeed =
+        std::clamp(p_.orbitGain * radialError, -0.5f * p_.orbitSpeed, 0.5f * p_.orbitSpeed);
+    return tangent * p_.orbitSpeed - outward * radialSpeed + orbitCenterVel_;
 }
 
 } // namespace ee

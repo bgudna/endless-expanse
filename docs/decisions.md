@@ -68,3 +68,11 @@ Alien types are data (`assets/data/aliens.json`, roles raider/trader/passer/dist
 
 ## D21: Placeholder rewards
 Accepting a hail gives +30 hull and full shield (trader) or +15 hull (survivors). M8 replaces this with resources.
+
+## D22: Orbit arrival for the player
+The player's autopilot no longer stops on its destination. `Ship::setOrbitDestination(center, radius)` brakes to the circle, then circles it at `orbitSpeed` (120 u/s) with a radial correction. The direction is chosen once on entry and kept. Right-click circles the point at 120 units. Double-click circles the object at its radius plus the standoff. Aliens still use `setDestination`, which stops on arrival, so their AI is unchanged.
+
+## D23: Orbiting selectable targets
+Any selected object or alien can be orbited, via the ORBIT HUD button or double-click. The orbit is stored as its own `Selection` (`orbitSel_`), so selecting something else leaves it alone. Each step, `PlayingState::updateOrbit` re-resolves the target through `locate()` and re-aims the ship at its current position and velocity. The ship therefore keeps up with moving NPCs: `Ship::setOrbitDestination` takes a `centerVelocity`, which is added to the approach and orbit velocities. If the target is destroyed or unloaded, the orbit ends with an "ORBIT ENDED" message. A right-click or a held right button cancels the orbit. The ORBIT button is greyed out and ignores clicks when nothing is selected. Exhaust is off while orbiting (see D22).
+
+The braking profile uses speed relative to the moving centre for its turn-lag term. Using absolute speed made a fast ship (about 200 u/s) stop closing on a moving target.
