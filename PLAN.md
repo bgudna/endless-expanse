@@ -1,268 +1,216 @@
-# Endless Expanse: Agentic Development Plan
+# Endless Expanse: Agentic Development Plan (City Pivot)
 
 ## 1. Vision
 
-A single starship is stranded far from home. The player pilots it across a procedurally generated galaxy of sectors, meeting aliens and hazards, while managing resources on the way home (think *Star Trek: Voyager*).
+A snow-covered, post-apocalyptic city that never ends. The player drives an armoured tumbler (a small armoured jeep) through an endless grid of streets, alleys, rubble and wrecks. Nanobot swarms (the cause of the apocalypse), raiders and scavengers hunt the roads. Friendly traders and rest-and-refuel bases keep the run going. Snow falls over everything as a top layer.
 
-- **Look:** retro vector-monitor aesthetic (glowing lines, phosphor bloom, CRT-ish feel) rendered at smooth 60 fps.
-- **Feel:** modern QOL (pause, autosave, undo-friendly UI, tooltips, rebindable and scalable UI, accessibility options).
-- **Input:** 100% mouse (move, zoom, select, interact, menus). The keyboard is never required. Optional keyboard shortcuts may be added later, but nothing depends on them.
-- **Tech:** C++20, SDL2 (window, input, audio, timing), OpenGL 3.3 core (graphics), CMake.
-- **Art pipeline:** the user draws vector assets later. Until then everything uses procedural basic shapes behind a stable "vector asset" interface.
+- **Look:** retro vector monitor. The world is greyscale. Amber is the only highlight colour, used for selection, the player, and important UI. No bloom. Shadows are dark translucent polygons cast at a fixed 45° light angle.
+- **Feel:** smooth 60 fps. Modern QOL: pause, autosave, tooltips, rebindable and scalable UI, accessibility options.
+- **Input:** 100% mouse. Click a point to drive there (the tumbler slows down and stops on it). Click or select objects and NPCs. The keyboard is never required.
+- **Tech:** C++20, SDL2, OpenGL 3.3 core, CMake. Procedural placeholder shapes behind `VectorShape` until the user's art arrives.
+- **Run:** endless. There is no win state. Survival is about fuel, hull and supplies, with trade and bases to keep going.
 
 ## 2. Guiding Principles for Agents
 
 1. **Always shippable:** every milestone ends with a game that builds, runs, and passes tests.
 2. **Small vertical slices:** finish one thin, working feature before widening.
-3. **Data-driven:** ships, aliens, and events are defined in data files (JSON), not hard-coded.
-4. **Deterministic simulation:** fixed timestep (e.g. 60 Hz) and a seeded RNG, so bugs are reproducible and tests are stable. Rendering interpolates between steps.
-5. **Separate sim from render:** simulation code must not include SDL or GL headers. This makes it headlessly testable.
-6. **Do not hardcode art:** all drawables go through `VectorShape`/`VectorAsset`, so imported art drops in without gameplay changes.
-7. **Record decisions** in `docs/decisions.md` (short ADR entries) when choosing between alternatives.
-8. **Performance budget:** 16.6 ms/frame. No per-frame heap allocations in hot paths, and no GL state thrash.
+3. **Data-driven:** vehicles, factions, items, and encounters live in `assets/data/*.json`.
+4. **Deterministic simulation:** fixed 60 Hz step and seeded RNG. Sectors are generated from `hash(seed, x, y)`.
+5. **Separate sim from render:** `src/sim`, `src/world`, `src/core`, `src/vector`, and `src/camera` never include SDL or GL.
+6. **Do not hardcode art:** all drawables go through `VectorShape`/`VectorAsset`.
+7. **Record decisions** in `docs/decisions.md` (ADR entries).
+8. **Performance budget:** 16.6 ms/frame. No per-frame heap allocation in hot paths.
+9. **Road access is sacred:** the road network must always be drivable. Obstacles may block alleys and blocks but never cut a road.
 
-## 3. Proposed Architecture
+## 3. Architecture
+
+Kept from the space build: engine (`platform`, `render`, `core`, `camera`, `vector`), the sector streamer, the floating origin, the HUD and button framework, and the test harness.
+
+Retired (removed in M0): starfield, space-ship physics and autopilot orbit, aliens and hazards, nebulae, black holes, exhaust trails, and the space encounter director.
 
 ```
-endless-expanse/
-  CMakeLists.txt
-  cmake/                  # toolchain, warnings, dependency helpers
-  docs/                   # decisions.md, design.md, asset-format.md
-  assets/
-    vectors/              # user-drawn vector files (SVG subset / custom)
-    data/                 # ships.json, aliens.json, events.json, ...
-    shaders/
-    audio/
-  src/
-    app/                  # main, Application, main loop, state stack
-    platform/             # SDL window, input events, timing, audio wrapper
-    render/               # GL context, shader mgr, line renderer, bloom, text
-    vector/               # VectorShape, VectorAsset, loaders, tessellation
-    core/                 # math, RNG, ECS/entity store, event bus, serialization
-    sim/                  # physics, ships, AI, combat, resources, world gen
-    world/                # sectors, galaxy map, procedural generation
-    camera/               # pan/zoom, LOD logic
-    ui/                   # mouse-driven widgets, HUD, menus, tooltips
-    game/                 # game states, campaign/progress, save/load
-  tests/                  # unit + headless sim tests (Catch2 or doctest)
-  tools/                  # asset validators, SVG-to-asset converter
+src/
+  app/        main, Application, states (Menu, Playing, Paused), HUD, trade UI
+  platform/   SDL window, input, timing
+  render/     GL, line batch, ground/shadow/snow passes, text
+  vector/     VectorShape, stroke font, procedural placeholder art
+  core/       fixed timestep, RNG, state stack, logging
+  camera/     2D camera, zoom and pan, culling
+  world/      sectors, road graph, blocks, buildings, debris, bases
+  sim/        tumbler physics and driving, tire tracks, collisions,
+              factions and NPCs, combat, trade, vitals, director
+assets/data/  vehicles.json, factions.json, items.json, encounters.json
+tests/        doctest unit and headless sim tests
 ```
-
-**Key choices (confirm or revise in `docs/decisions.md`):**
-
-| Concern | Choice | Reason |
-|---|---|---|
-| Build | CMake + FetchContent or vcpkg | Portable, agent-friendly |
-| GL loader | glad (GL 3.3 core) | macOS-compatible (macOS caps at 4.1) |
-| Math | glm | Standard and lightweight |
-| Data | nlohmann/json | Easy data-driven content |
-| Tests | doctest or Catch2 | Headless sim tests |
-| Entities | Simple ECS (e.g. entt) or a hand-rolled SoA store | Many entities when zoomed out |
-| Text | Vector stroke font (own) | Matches the retro vector look |
-| Audio | SDL_mixer or miniaudio, with synthesized retro sfx | Optional until later |
-
-> macOS note: OpenGL is deprecated but works up to 4.1. Target **3.3 core** and avoid compute shaders and newer features.
-
-**Vector rendering approach:**
-- Shapes are polylines and polygons (outline-first, as on vector monitors).
-- Draw lines as GPU-expanded quads (screen-space width, round/anti-aliased ends) in one batched draw call.
-- Glow: render to an offscreen FBO, then do a threshold, blur, and additive composite pass. Add subtle persistence/flicker as a toggle.
-- Zoom-independent line width, plus LOD (simplify or replace with icons at far zoom).
 
 ## 4. Milestones
 
-Each milestone lists **tasks**, **deliverables**, and **acceptance criteria**. Agents should complete them in order unless noted as parallelizable.
+Each milestone lists **tasks**, **deliverables**, and **acceptance**. Complete them in order unless noted.
 
-### M0: Project Bootstrap
+### P0: Pivot and Clean-Up
 **Tasks**
-- Create the CMake project, `.clang-format`, `.gitignore`, and warnings-as-errors for the game target.
-- Pull in SDL2, glm, glad, nlohmann/json, and the test framework.
-- Open a window with a GL 3.3 core context, vsync on, and clear the screen.
-- Add a README with build and run instructions for macOS (and note other platforms).
+- Remove the space content: starfield, ship, aliens, hazards, nebulae, exhaust, space director. Keep the engine parts and the streamer.
+- Remove bloom from the default path. The `PostProcess` code may stay for later use, but it is off and unused.
+- Rename the app from Endless Expanse only where it is user-facing. Keep the repo name until the user decides.
+- Update `README.md` and `docs/decisions.md`.
 
-**Acceptance**
-- `cmake -B build && cmake --build build` succeeds from clean.
-- The window opens, closes cleanly, and `ctest` runs (even with one trivial test).
+**Acceptance:** builds, runs, and shows an empty greyscale screen with a working pan and zoom. Tests pass with the space tests removed.
 
-### M1: Core Loop and Timing
+### P1: Sectors, Ground and Road Network
 **Tasks**
-- Fixed-timestep loop (60 Hz sim) with render interpolation, a frame-time cap, and a spiral-of-death guard.
-- Input layer that translates SDL events into an `InputState` (mouse position, buttons, wheel, drag deltas).
-- Game state stack (Boot, MainMenu, Playing, Paused).
-- Debug overlay: FPS, frame ms, entity count (toggle by clicking a debug button).
-- Logging utility.
+- Each 6000x6000 sector gets a seeded street grid. Roads connect across sector borders. A road crossing an edge is decided by a hash of that edge, so both neighbours agree without loading each other.
+- Blocks sit between roads. Alleys branch from roads into blocks.
+- Ground is flat grey with a faint vector grid or texture cue for speed reading.
+- Debris is scattered as static dots and small shapes on the ground.
 
-**Acceptance**
-- Stable 60 fps. Sim steps are verified by a test to be independent of render rate.
+**Acceptance:** the same seed always produces the same sector (tested). A road exists at every sector border on both sides. Walking the road graph reaches any sector from any other (tested).
 
-### M2: Vector Renderer
+### P2: Buildings and Shadows
 **Tasks**
-- Batched line renderer (thick, anti-aliased, round caps) with per-vertex color and an additive blend option.
-- `VectorShape` (a list of polylines and polygons, a local origin, and a color/glow tag) and a `Transform2D`.
-- Procedural basic shapes: triangle ship, circle planet, asteroid polygon, star cross.
-- Vector stroke font for HUD text.
-- Bloom post-process pass with a quality setting (off, low, high).
-- Resize and HiDPI handling (use the drawable size, not the window size).
+- Buildings are placed in blocks with varied footprints and heights. The view is from above, so only rooftop outlines are drawn.
+- Fixed light: the shadow is cast at 45° to the ground, with length proportional to height. Shadows are dark translucent polygons drawn on the ground layer, under the roofs.
+- Shadows are also cast by the tumbler, wrecks, rubble and NPCs (lower heights).
+- Draw order: ground, debris, shadows, roofs and vehicles, then snow (P5).
 
-**Acceptance**
-- A demo scene draws 10,000 line segments at 60 fps with bloom on a mid-range machine.
-- Visual check: crisp lines, soft glow, correct at Retina scale.
+**Acceptance:** shadows line up at 45° for every object (tested for the offset direction). Visual check: a clear shadow for each building.
 
-### M3: Camera, Pan and Zoom (mouse only)
+### P3: Tumbler and Driving
 **Tasks**
-- 2D camera with smooth (critically damped) zoom and pan.
-- Mouse wheel zooms toward the cursor. Middle-drag or edge-drag pans. A click-drag on empty space may also pan.
-- Zoom range from close tactical view to full-sector view, plus a "galaxy map" level (see M7).
-- Line widths stay constant in screen space. LOD rules swap detailed shapes for icons or blips when far out.
-- A visible on-screen zoom slider and "recenter on ship" button, so everything is reachable by mouse.
+- Tumbler physics: top speed, acceleration, braking, and minor traction. Traction is reduced on ice and snow patches, so the vehicle slides slightly on turns.
+- Click a point to drive there. The tumbler decelerates and stops on the point. No orbit, no circling, and no turning around to stop.
+- Tire tracks: faint ribbons that fade out over time, drawn on the ground layer under the shadows.
+- Keep the FOLLOW camera, the zoom, and pan from the current build.
 
-**Acceptance**
-- Zoom is smooth with no jitter. Unit tests cover the screen/world coordinate transforms.
-- Zooming far out keeps 60 fps with 5,000+ entities in the sector.
+**Acceptance:** the tumbler reaches any clicked point and stops on it without overshoot (tested). Tracks fade to zero in a fixed time (tested).
 
-### M4: Ship and Movement
+### P4: Obstacles, Rubble and Wrecks
 **Tasks**
-- Player ship entity with Newtonian-lite physics (inertia with optional drag assist, as a QOL toggle).
-- Mouse control scheme (the design decision is recorded in `docs/decisions.md`):
-  - Right-click on a world point: set a destination (autopilot with rotate, thrust, then brake).
-  - Left-click on an object: select it. Double-click: set it as a target or interact.
-  - Hold to steer toward the cursor (optional).
-- Thruster-trail vector effect and a path preview line.
-- Fixed-step physics with unit tests (arrival, braking distance, no overshoot oscillation).
+- Obstacles: wrecks, rocks, rubble, collapsed buildings. They are placed in blocks and alleys, never on road centrelines.
+- Collisions: the tumbler is stopped or pushed by solids. Impact damage is modest.
+- Passability guarantee: a road-clearance margin is kept free, and tests check that every road remains drivable across sector borders.
 
-**Acceptance**
-- The ship travels to any clicked point smoothly and stops there. Tests prove this deterministically.
+**Acceptance:** obstacles never block a road (tested). The headless sim test drives a random route across 20 sectors without getting stuck.
 
-### M5: World, Sectors and Procedural Generation
+### P5: Snow Layer and Greyscale Look
 **Tasks**
-- Galaxy is a grid or graph of **sectors**. Each sector is generated from `hash(galaxy_seed, sector_coords)`, so it is deterministic and streamable.
-- Sector contents: star(s), planets, asteroid fields, nebulae, anomalies, debris, derelicts.
-- Home direction: a long-range goal (e.g. N sectors away) with a vague bearing, which the player refines through exploration.
-- Sector streaming: load and unload as the ship crosses boundaries, with no hitches.
-- Parallax starfield background layers (vector dots and lines).
-- Seamless handling of large coordinates (sector-local origin to avoid float precision issues).
+- Snow is a top-layer particle system: purely visual, drawn last, with no effect on physics or traction.
+- The world is greyscale. Amber is the highlight colour for the player, the selection, the target, and key HUD states.
+- Remove bloom from the render path. Keep line rendering and vector style.
+- Snow density and wind are settings. The default is light, with a toggle to turn it off.
 
-**Acceptance**
-- The same seed always produces the same sector (tested). Crossing sector borders is seamless.
+**Acceptance:** visual check against the greyscale spec. Snow stays at 60 fps with a dense setting.
 
-### M6: Hazards, Aliens and Encounters (implemented; awaiting on-screen review. Collision is circle-only, polygon narrow phase deferred)
+### P6: Factions and NPCs
 **Tasks**
-- Collision system (broadphase grid, circle/polygon narrow phase) and damage.
-- Hazards: asteroids, radiation/nebula zones (shield or sensor effects), black-hole gravity wells, mines.
-- Alien factions defined in `assets/data/aliens.json` (shape, speed, behavior, disposition).
-- AI behaviors as a small state machine or behavior tree: Idle, Patrol, Hail, Flee, Pursue, Attack, Trade.
-- **Encounter director:** a seeded system that randomly spawns encounters at a tuned pace, using a tension/pacing curve. It avoids spamming and guarantees some quiet time.
-- Encounter outcomes: hostile combat, negotiation or trade (a simple menu), distress call, ambush, neutral pass-by.
-- Combat: mouse-targeted weapons (click an enemy to target, auto-fire with cooldowns), shields, and hull.
+- Nanobot swarms: random swarms that drift, pursue and split apart, with flocking behaviour. They are the main threat.
+- Raiders: armed vehicles that pursue and attack.
+- Scavengers: unarmed vehicles that loot wrecks and flee when threatened.
+- Friendlies: traders who can be hailed, bought from, and sold to.
+- The encounter director spawns swarms, raiders, and scavengers at a tuned pace. It guarantees quiet time.
 
-**Acceptance**
-- The headless sim test runs 10 minutes of simulated time with no crashes, NaNs, or leaks. The encounter rate matches the config.
+**Acceptance:** a 10-minute headless soak runs with no crashes, NaNs, or leaks. The spawn rate matches the config.
 
-### M7: Zoom-Out Strategic View
+### P7: Rest Bases, Refuel and Trade
 **Tasks**
-- Far zoom shows the whole current sector with icons, sensor ranges, and known entities. Unexplored or out-of-sensor areas are fogged.
-- Further zoom shows the galaxy map: explored sectors, discovered points of interest, and the route home.
-- Mouse-driven waypointing from the map (click a sector to plot a long-range course). Warp or long-range travel interacts with the encounter director.
-- Smooth cross-fade between detail levels.
+- Rest bases appear at regular intervals along the road network, marked on the ground map.
+- At a base, the player can rest (restore crew morale and hull), refuel, and repair.
+- Trading: buy and sell items with friendly traders and at bases. Prices are data-driven.
+- Vitals: fuel, hull, supplies, and scrap currency. Keep this set small.
 
-**Acceptance**
-- The player can zoom from the tactical view to the galaxy map continuously and plot a course by clicking.
+**Acceptance:** a headless test checks that refuel and rest restore the right values and that trade transactions balance.
 
-### M8: Resources, Progression and Win Condition
+### P8: Strategic Zoom-Out
 **Tasks**
-- Resources: fuel, energy, hull, shields, supplies, crew morale (keep the set small at first).
-- Upgrades and repairs (from salvage, trade, and discoveries).
-- Distance-to-home tracking and clues, with a final destination sequence and ending.
-- Fail states: out of fuel and stranded, or ship destroyed. Provide soft recovery options (QOL).
-- Balance pass using data files and a headless sim "bot" that flies routes to find the difficulty curve.
+- Far zoom shows the local area: streets, bases and known factions, with fog over unexplored sectors.
+- Further zoom shows the explored district map, with known bases and the route taken.
+- Mouse-driven route planning: click a base to plan a route on the explored map.
 
-**Acceptance**
-- A full run from start to home is possible. A scripted bot can finish an easy-difficulty run, and a "do nothing" run fails.
+**Acceptance:** zoom is continuous from street level to the district map without a hitch.
 
-### M9: UI/UX and QOL
+### P9: Survival Loop and Difficulty
 **Tasks**
-- Mouse-only UI toolkit: buttons, sliders, toggles, tooltips, context menus, scrollable lists, modal dialogs. All drawn in the vector style.
-- HUD: ship status, minimap or sector scale, target panel, comms log, objective tracker.
-- Pause with the mouse, and a time-scale control (pause, 1x, 2x).
-- Autosave on sector change plus manual save slots (versioned JSON or binary).
-- Settings: resolution/fullscreen, vsync, bloom/CRT intensity, UI scale, colorblind-safe palettes, screen shake toggle, and audio volumes.
-- Tutorial as contextual hints that can be dismissed or disabled.
+- Permadeath: the tumbler is destroyed or runs out of fuel and supplies. The run ends and restarts from the beginning, with nothing carried over. Save slots store only the current run.
+- Difficulty ramps with distance from the start.
+- Home is a long-term goal, found by triangulating its signal. The home base broadcasts periodically. The player must locate enough transmission relays across the city to fix its position. Reaching the signal source and returning home is the win state.
+- Balance pass using data and a headless sim bot that drives routes, to find a playable curve.
 
-**Acceptance**
-- Every function is reachable by mouse. Save/load round-trips exactly (tested).
+**Acceptance:** a scripted bot survives a 30-minute headless run on normal difficulty. A do-nothing run fails within a reasonable time.
 
-### M10: Audio and Polish
+### P10: UI/UX and QOL
 **Tasks**
-- Synthesized or chiptune-style sfx and ambient music. Volumes are configurable.
-- Particle-like vector effects: explosions (line fragments), shield ripples, warp streaks.
-- CRT options: scanlines, curvature, flicker, and chromatic aberration, all toggleable.
-- Profile and optimize (batching, instancing, culling), and fix hitches.
+- Mouse-only UI: buttons, sliders, toggles, tooltips, context menus, scrollable lists, and modal dialogs, in the vector style.
+- HUD: vehicle status, fuel, hull, supplies, a comms log, the trade panel, and a sector scale.
+- Pause, time-scale (1x, 2x), autosave on sector change, and manual save slots.
+- Settings: resolution, vsync, snow density, UI scale, colour-blind safe modes (amber-based highlights suit most), screen shake toggle, and audio volumes.
 
-**Acceptance**
-- Sustained 60 fps in worst-case scenes. A 30-minute soak test shows no memory growth.
+**Acceptance:** every function is reachable by mouse. Save/load round-trips exactly (tested).
 
-### M11: Vector Asset Import Pipeline (can start in parallel after M2)
+### P11: Audio and Polish
 **Tasks**
-- Define the asset format in `docs/asset-format.md`. Recommended: a **restricted SVG subset** (paths, polylines, polygons, circles, with named groups for hardpoints such as `thruster`, `weapon`, and `hitbox`), converted offline into a compact binary or JSON form by `tools/`.
-- A runtime loader and validator with clear error messages.
-- Hot-reload in debug builds when asset files change.
-- Collision hulls are derived from, or authored alongside, the shape.
-- Fallback: if an asset is missing, use the procedural placeholder shape.
+- Synthesized sfx: engine hum, tyre slide, gunfire, and nanobot swarm buzz. Ambient wind. Volumes are configurable.
+- Vector effects: debris fragments on impact, dust puffs, and swarm flicker.
+- CRT options: scanlines, curvature, flicker, toggleable. Bloom stays off.
+- Profile and optimize batching, culling, and snow.
 
-**Acceptance**
-- The user drops a ship `.svg` into `assets/vectors/`, references it in `ships.json`, and sees it in game with working hitbox and thruster points.
+**Acceptance:** sustained 60 fps in worst-case scenes. A 30-minute soak shows no memory growth.
 
-### M12: Release Readiness
+### P12: Vector Asset Import Pipeline (can start after P2)
 **Tasks**
-- Packaging (macOS `.app` bundle, and optionally Windows/Linux), versioning, a crash-log file, and CI that builds and runs the tests.
-- Final balance, bug bash, and README/screenshots.
+- Define the asset format in `docs/asset-format.md`: a restricted SVG subset with named groups for `wheel`, `hitbox`, `muzzle`, and `roof`.
+- Runtime loader and validator with clear errors. Hot reload in debug builds.
+- Fallback to the procedural placeholder if an asset is missing.
+
+**Acceptance:** the user drops a vehicle `.svg` into `assets/vectors/`, references it in `vehicles.json`, and sees it in game with working hitbox and wheel points.
+
+### P13: Release Readiness
+**Tasks**
+- macOS `.app` bundle (optional Windows/Linux), versioning, crash log, CI that builds and runs tests.
+- Bug bash, balance, README and screenshots.
 
 ## 5. Agent Workflow
 
-For each task, an agent should:
+For each task:
 
-1. **Read** `docs/decisions.md`, this plan, and the relevant source before coding.
-2. **Plan** a short checklist of what will change, and flag any deviation from the plan.
-3. **Implement** the smallest coherent change. Keep the sim free of SDL/GL dependencies.
-4. **Test:** add or update unit or headless tests. Build and run `ctest`.
-5. **Verify visually** when the change is graphical: run the game, then capture a screenshot or describe what was seen.
-6. **Report** what changed, what was validated, and any open questions.
+1. **Read** `docs/decisions.md`, this plan, and the relevant source.
+2. **Plan** a short checklist and flag deviations.
+3. **Implement** the smallest coherent change. Keep the sim free of SDL/GL.
+4. **Test:** unit or headless tests. Build, then run the tests.
+5. **Verify visually** for graphical work. Report what the user should look at.
+6. **Report** what changed, what was validated, and open questions.
 
-**Suggested parallel tracks** (disjoint write scopes, so agents don't conflict):
-- *Track A, Engine:* M0 to M3 (platform, loop, renderer, camera).
-- *Track B, Simulation:* M4 to M6 (physics, world, AI). Starts after M1 and uses the headless test harness.
-- *Track C, Tools/UI:* M9 (UI toolkit) and M11 (asset pipeline). Starts after M2.
-- Integration points: `VectorShape`, the entity/component definitions, and the data schemas. Change these only via an agreed PR-sized task.
+## 6. Testing and Quality
 
-## 6. Testing and Quality Strategy
-
-- **Unit tests:** math, camera transforms, RNG determinism, world generation, physics, serialization.
-- **Headless sim tests:** run N simulated minutes with a seed and assert invariants (no NaN, bounded entities, resources stay within range).
-- **Golden/replay tests:** record an input sequence plus a seed, and replay it to check the final state hash.
-- **Render checks:** manual screenshot review, plus optional image-diff smoke tests.
-- **Tooling:** AddressSanitizer/UBSan builds in CI, `clang-tidy` and `clang-format`.
-- **Perf:** frame-time capture in the debug overlay, and a benchmark scene at max entity count.
+- **Unit tests:** math, camera transforms, RNG determinism, road graph and sector generation, shadow geometry, tumbler physics, track fade, and trade maths.
+- **Headless sim tests:** N simulated minutes per seed with invariant checks (no NaN, bounded entity counts, resources in range).
+- **Passability test:** a road path check across many sectors.
+- **Tooling:** AddressSanitizer/UBSan builds, `clang-format`.
+- **Perf:** frame-time readout in the debug overlay, and a benchmark scene with dense snow and many NPCs.
 
 ## 7. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| macOS OpenGL deprecation/4.1 cap | Stick to GL 3.3 core and keep the renderer behind an interface |
-| Float precision in huge space | Sector-local coordinates plus a camera-relative origin |
-| Mouse-only control is awkward in combat | Autopilot, auto-fire, targeting by click, pause-and-order, and time scaling |
-| Entity count when zoomed out | LOD, spatial hashing, and simulating distant sectors at a lower rate |
-| Art changes later | Everything goes through the `VectorAsset` interface and data files |
+| Endless city with a seam at sector borders | Road edges are hashed, so neighbours agree without loading each other. Tested across borders |
+| Obstacles trap the player | Roads are cleared by construction. A passability test runs over random routes |
+| Too many shadows and NPCs at zoom-out | LOD: far zoom draws icons and simplified shadows. Snow stays a single batched pass |
+| Snow hides gameplay information | Snow is a light, toggleable layer, and highlights stay amber |
+| Art changes later | All drawables go through `VectorShape` and data files |
 | Scope creep | Hold to the milestone order. Park ideas in `docs/backlog.md` |
+| Permadeath frustration | Clear run summary on death, and a fast restart. Easier early game |
 
-## 8. Open Questions for the Designer
+## 8. Decisions Made by the Designer
 
-1. Real-time with pause (as assumed), or turn-based or hybrid?
-2. Is combat central or occasional? Are the aliens mostly diplomatic?
-3. Is the galaxy infinite and random, or a fixed-length journey with a guaranteed route home?
-4. Should there be a crew, a story, or narrative events (Voyager-style episodic encounters)?
-5. Target platforms (macOS only at first?) and a minimum spec for 60 fps?
-6. Preferred vector format for your art (SVG from Inkscape or Illustrator, or a custom editor)?
+1. **Home:** the home base broadcasts a periodic signal. The player finds transmission relays across the city, and enough relays triangulate its position. Victory is reaching the signal source and returning home.
+2. **Name:** keep "Endless Expanse".
+3. **Snow:** purely visual. Traction changes only on ice patches.
+4. **Permadeath:** when the tumbler dies, the run ends and the player starts again from the beginning. Nothing carries over.
+
+## 8a. Open Questions
+
+1. **Signal source vs home:** is the source a separate beacon that the player must reach, with "home" being the player's base elsewhere? Or is the source the home base itself? (Assumed: the source is the beacon at home, and "return home" means bringing the tumbler back to the start.)
+2. **Relay count:** how many relays are needed to triangulate (minimum 3 for a 2D fix)? Are relays guarded, and do they show on the map once found?
+3. **Target platforms:** macOS only at first?
 
 ## 9. Suggested First Prompt for the Coding Agent
 
-> Read `PLAN.md`. Complete **M0** and **M1**. Use CMake, SDL2, glad (GL 3.3 core), glm, and doctest. Create the directory layout from section 3, with simulation code free of SDL/GL includes. Build, run the tests, and report. Do not start M2 until I confirm.
+> Read `PLAN.md`. Complete **P0**. Retire the space content, keep the engine, and leave a greyscale empty world with working pan and zoom. Build and run the tests, then report. Do not start P1 until I confirm.

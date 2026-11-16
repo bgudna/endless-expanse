@@ -76,3 +76,29 @@ The player's autopilot no longer stops on its destination. `Ship::setOrbitDestin
 Any selected object or alien can be orbited, via the ORBIT HUD button or double-click. The orbit is stored as its own `Selection` (`orbitSel_`), so selecting something else leaves it alone. Each step, `PlayingState::updateOrbit` re-resolves the target through `locate()` and re-aims the ship at its current position and velocity. The ship therefore keeps up with moving NPCs: `Ship::setOrbitDestination` takes a `centerVelocity`, which is added to the approach and orbit velocities. If the target is destroyed or unloaded, the orbit ends with an "ORBIT ENDED" message. A right-click or a held right button cancels the orbit. The ORBIT button is greyed out and ignores clicks when nothing is selected. Exhaust is off while orbiting (see D22).
 
 The braking profile uses speed relative to the moving centre for its turn-lag term. Using absolute speed made a fast ship (about 200 u/s) stop closing on a moving target.
+
+## D24: Pivot to a snow-covered post-apocalyptic city
+The space game is retired and replaced in place. The player drives an armoured tumbler through an endless snowy city. The engine (platform, render, core, camera, vector, streamer, floating origin, HUD framework) is kept. The starfield, space ship, aliens, hazards, nebulae, exhaust, and space director are removed in P0. Home (D16) and the win state are under review (PLAN.md open question 1).
+
+Movement stays mouse-only. Clicking a point drives the tumbler there, and it slows to stop on the point. The orbit concept (D22, D23) is removed.
+
+## D25: City world rules and look
+- Sectors are 6000x6000, seeded by `hash(seed, x, y)`. A road crosses each sector edge at a position chosen by hashing that edge, so neighbours agree without loading each other.
+- Blocks sit between roads. Alleys branch from roads. Obstacles (wrecks, rocks, rubble, collapsed buildings) never cut a road centreline.
+- Fixed light: shadows are cast at 45° with length proportional to height. They are dark translucent polygons drawn on the ground layer, under the roofs. Vehicles, wrecks and NPCs cast shadows too.
+- The world is greyscale. Amber is the only highlight colour (player, selection, target, key HUD states). Bloom is removed from the default path.
+- Snow is a purely visual top layer with no effect on physics. Traction changes only on ice patches.
+- Tyre tracks are faint ribbons that fade out over time.
+- Rest bases allow rest, refuel, and repair. Trading with friendlies and bases is kept from the space build (data-driven).
+- The run is endless with no win state. Fail state and recovery are in P9.
+
+## D26: Permadeath and home as the goal
+- When the tumbler dies or runs out of fuel and supplies, the run ends and the game restarts from the beginning. Nothing carries over between runs. Save slots hold only the current run.
+- Home is a long-term goal and the only win state. Its location is found through clues from exploration. The run is endless until then.
+- Replaces the soft recovery and endless-with-no-win assumptions in D24 and D25.
+
+## D27: Finding home by triangulation
+- The home base broadcasts a signal periodically.
+- The player must locate transmission relays scattered across the city. Enough relays fix the home position (at least 3 for a 2D fix).
+- Victory: reach the signal source and return home. The exact meaning of "source" versus "home" is an open question in PLAN.md §8a.
+- This replaces the clue-based approach in D26.
